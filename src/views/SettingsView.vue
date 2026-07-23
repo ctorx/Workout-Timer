@@ -21,6 +21,8 @@ import {
   writeLocal,
 } from '@/lib/persistence';
 import { uuid } from '@/lib/id';
+import { APP_VERSION, shortVersion } from '@/lib/version';
+import { checkForAppUpdate } from '@/lib/updates';
 import ConfirmDialog from '@/components/ConfirmDialog.vue';
 
 const settingsStore = useSettingsStore();
@@ -28,6 +30,37 @@ const workouts = useWorkoutsStore();
 const sessions = useSessionsStore();
 
 const s = computed(() => settingsStore.settings);
+
+/* ------------------------------ version ------------------------------ */
+
+const versionShort = shortVersion(APP_VERSION);
+const versionFull = APP_VERSION;
+const updateChecking = ref(false);
+const updateMessage = ref('');
+const updateIsError = ref(false);
+
+async function onCheckForUpdates(): Promise<void> {
+  updateChecking.value = true;
+  updateMessage.value = '';
+  updateIsError.value = false;
+  const result = await checkForAppUpdate();
+  updateChecking.value = false;
+  if (result === 'updated') {
+    updateMessage.value = 'Updating… reloading.';
+    return;
+  }
+  if (result === 'current') {
+    updateMessage.value = 'You’re on the latest version.';
+    return;
+  }
+  if (result === 'unavailable') {
+    updateMessage.value = 'Updates aren’t available here (no service worker).';
+    updateIsError.value = true;
+    return;
+  }
+  updateMessage.value = 'Couldn’t check for updates. Try again with a network connection.';
+  updateIsError.value = true;
+}
 
 /* ---------------------------- basic fields --------------------------- */
 
@@ -344,6 +377,40 @@ async function eraseAll(): Promise<void> {
         @blur="commitBeeps"
         @keydown.enter="($event.target as HTMLInputElement).blur()"
       />
+    </section>
+
+    <!-- About / version -->
+    <section class="mt-4 rounded-2xl border border-border bg-surface-1 p-4">
+      <h2 class="text-xs font-semibold uppercase tracking-widest text-faint">About</h2>
+      <div class="mt-3 flex items-baseline justify-between gap-3">
+        <span class="text-sm text-muted">Version</span>
+        <code
+          class="tnum rounded-lg bg-surface-2 px-2 py-1 text-sm font-medium text-text"
+          :title="versionFull"
+        >
+          {{ versionShort }}
+        </code>
+      </div>
+      <p class="mt-1 text-xs text-faint">
+        Build commit
+        <span class="tnum break-all">{{ versionFull }}</span>
+      </p>
+      <button
+        type="button"
+        class="mt-3 min-h-[48px] w-full rounded-xl bg-surface-2 px-4 font-medium disabled:opacity-50"
+        :disabled="updateChecking"
+        @click="onCheckForUpdates"
+      >
+        {{ updateChecking ? 'Checking…' : 'Check for updates' }}
+      </button>
+      <p
+        v-if="updateMessage"
+        class="mt-2 text-sm"
+        :class="updateIsError ? 'text-warn' : 'text-muted'"
+        aria-live="polite"
+      >
+        {{ updateMessage }}
+      </p>
     </section>
 
     <!-- Appearance -->

@@ -1,9 +1,9 @@
 import { createApp } from 'vue';
 import { createPinia } from 'pinia';
-import { registerSW } from 'virtual:pwa-register';
 import App from '@/App.vue';
 import router from '@/router';
 import { initPersistence } from '@/lib/persistence';
+import { initUpdates } from '@/lib/updates';
 import { useSettingsStore } from '@/stores/settings';
 import { useWorkoutsStore } from '@/stores/workouts';
 import { useSessionsStore } from '@/stores/sessions';
@@ -11,7 +11,7 @@ import { usePlayerStore } from '@/stores/player';
 import { resumeAudioIfNeeded } from '@/lib/audio';
 import '@/style.css';
 
-registerSW({ immediate: true });
+initUpdates();
 
 async function boot(): Promise<void> {
   const app = createApp(App);
