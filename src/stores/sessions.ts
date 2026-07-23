@@ -44,6 +44,12 @@ export const useSessionsStore = defineStore('sessions', {
       this.sessions = this.sessions.filter((s) => s.id !== id);
       await deleteSession(id);
     },
+    /** Deletes every finished/abandoned session. Leaves workouts and settings alone. */
+    async clearHistory() {
+      const ids = this.sessions.map((s) => s.id);
+      this.sessions = [];
+      await Promise.all(ids.map((id) => deleteSession(id)));
+    },
     async replaceAll(sessions: Session[]) {
       // Used by import-replace; caller has already persisted via importer.
       this.sessions = sessions;

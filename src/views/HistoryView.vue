@@ -19,11 +19,19 @@ import {
   formatWeekday,
 } from '@/lib/time';
 import SparkLine from '@/components/SparkLine.vue';
+import ConfirmDialog from '@/components/ConfirmDialog.vue';
 
 const sessions = useSessionsStore();
 const workouts = useWorkoutsStore();
 
 const filterWorkoutId = ref<string>('');
+const clearOpen = ref(false);
+
+async function clearHistory(): Promise<void> {
+  clearOpen.value = false;
+  await sessions.clearHistory();
+  filterWorkoutId.value = '';
+}
 
 const finished = computed(() =>
   sessions.ordered.filter((s) => s.status !== 'in_progress'),
@@ -76,8 +84,16 @@ const statsOpen = ref(false);
 
 <template>
   <main class="safe-top mx-auto w-full max-w-xl px-4 pb-6">
-    <header class="py-4">
+    <header class="flex items-center justify-between gap-3 py-4">
       <h1 class="text-2xl font-bold tracking-tight">History</h1>
+      <button
+        v-if="finished.length > 0"
+        type="button"
+        class="min-h-[44px] rounded-xl px-3 text-sm font-medium text-danger"
+        @click="clearOpen = true"
+      >
+        Clear history
+      </button>
     </header>
 
     <!-- Stats summary -->
@@ -187,6 +203,16 @@ const statsOpen = ref(false);
         </router-link>
       </div>
     </section>
+
+    <ConfirmDialog
+      :open="clearOpen"
+      title="Clear history?"
+      message="Every logged session will be deleted. Workouts and settings are kept. This cannot be undone."
+      confirm-label="Clear history"
+      danger
+      @confirm="clearHistory"
+      @cancel="clearOpen = false"
+    />
   </main>
 </template>
 

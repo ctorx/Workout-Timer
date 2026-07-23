@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed } from 'vue';
-import { useRoute } from 'vue-router';
+import { computed, ref } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { useSessionsStore } from '@/stores/sessions';
 import { sessionVolume, formatVolume, sessionCompletionPercent } from '@/lib/stats';
 import { formatClockTime, formatDuration, formatShortDate, formatWeekday } from '@/lib/time';
+import ConfirmDialog from '@/components/ConfirmDialog.vue';
 
 const route = useRoute();
+const router = useRouter();
 const sessions = useSessionsStore();
 
 const session = computed(() => sessions.byId(route.params.id as string));
@@ -16,6 +18,16 @@ const activeSeconds = computed(() =>
     0,
   ),
 );
+
+const deleteOpen = ref(false);
+
+async function deleteSession(): Promise<void> {
+  const id = session.value?.id;
+  deleteOpen.value = false;
+  if (!id) return;
+  await sessions.remove(id);
+  await router.replace({ name: 'history' });
+}
 </script>
 
 <template>
@@ -126,6 +138,24 @@ const activeSeconds = computed(() =>
           </tbody>
         </table>
       </section>
+
+      <button
+        type="button"
+        class="mt-6 min-h-[48px] w-full rounded-xl border border-danger/60 font-semibold text-danger"
+        @click="deleteOpen = true"
+      >
+        Delete session
+      </button>
+
+      <ConfirmDialog
+        :open="deleteOpen"
+        title="Delete session?"
+        :message="`“${session.workoutName}” from ${formatShortDate(session.startedAt)} will be removed from history. This cannot be undone.`"
+        confirm-label="Delete session"
+        danger
+        @confirm="deleteSession"
+        @cancel="deleteOpen = false"
+      />
     </template>
   </main>
 </template>
