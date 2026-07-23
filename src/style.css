@@ -1,0 +1,136 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/inter';
+
+/*
+ * Token system.
+ * Semantic tokens are plain CSS custom properties defined per theme,
+ * then mapped into Tailwind via @theme inline so utilities like
+ * bg-surface-1 / text-muted resolve to the active theme.
+ */
+:root {
+  /* Dark theme (default): deep desaturated ink, two elevation steps. */
+  --c-bg: #0e1116;
+  --c-surface-1: #151a21;
+  --c-surface-2: #1d242e;
+  --c-border: #2a3240;
+  --c-text: #e8ecf1;
+  --c-text-muted: #8b95a5;
+  --c-text-faint: #828c9d;
+  --c-accent: #6ea8fe;
+  --c-accent-ink: #0a0f16;
+  /* Player state hues — the one place color carries information. */
+  --c-work: #3ddc84;
+  --c-rest: #38bdf8;
+  --c-transition: #a78bfa;
+  --c-warn: #f5b041;
+  --c-danger: #f2655c;
+  --c-work-ink: #052613;
+  --c-rest-ink: #04222f;
+  --c-transition-ink: #170b33;
+  color-scheme: dark;
+}
+
+.light {
+  --c-bg: #f2f4f7;
+  --c-surface-1: #ffffff;
+  --c-surface-2: #e8ebf0;
+  --c-border: #d4dae2;
+  --c-text: #171d26;
+  --c-text-muted: #55606e;
+  --c-text-faint: #626c7a;
+  --c-accent: #2563eb;
+  --c-accent-ink: #ffffff;
+  --c-work: #0a7a43;
+  --c-rest: #03699c;
+  --c-transition: #7c3aed;
+  --c-warn: #b45309;
+  --c-danger: #dc2626;
+  --c-work-ink: #ffffff;
+  --c-rest-ink: #ffffff;
+  --c-transition-ink: #ffffff;
+  color-scheme: light;
+}
+
+@theme inline {
+  --color-bg: var(--c-bg);
+  --color-surface-1: var(--c-surface-1);
+  --color-surface-2: var(--c-surface-2);
+  --color-border: var(--c-border);
+  --color-text: var(--c-text);
+  --color-muted: var(--c-text-muted);
+  --color-faint: var(--c-text-faint);
+  --color-accent: var(--c-accent);
+  --color-accent-ink: var(--c-accent-ink);
+  --color-work: var(--c-work);
+  --color-rest: var(--c-rest);
+  --color-transitionhue: var(--c-transition);
+  --color-warn: var(--c-warn);
+  --color-danger: var(--c-danger);
+  --color-work-ink: var(--c-work-ink);
+  --color-rest-ink: var(--c-rest-ink);
+  --color-transition-ink: var(--c-transition-ink);
+}
+
+@theme {
+  --font-sans:
+    'Inter Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI',
+    Roboto, sans-serif;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--c-bg);
+  color: var(--c-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Timers, weights, reps and counters must not jitter as digits change. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Visible focus for keyboard users, quiet for pointer users. */
+:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Number inputs: hide spinners, we provide our own controls. */
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.safe-top {
+  padding-top: env(safe-area-inset-top);
+}

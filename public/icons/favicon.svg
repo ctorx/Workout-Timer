@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#0E1116"/>
+  <!-- timer ring: draining countdown arc -->
+  <circle cx="256" cy="268" r="150" fill="none" stroke="#1D242E" stroke-width="34"/>
+  <path d="M 256 118 A 150 150 0 1 1 125.1 342.6" fill="none" stroke="#3DDC84" stroke-width="34" stroke-linecap="round"/>
+  <!-- stem -->
+  <rect x="238" y="52" width="36" height="44" rx="10" fill="#3DDC84"/>
+  <!-- dumbbell -->
+  <g fill="#E8ECF1">
+    <rect x="196" y="261" width="120" height="14" rx="7"/>
+    <rect x="168" y="228" width="30" height="80" rx="10"/>
+    <rect x="314" y="228" width="30" height="80" rx="10"/>
+    <rect x="140" y="248" width="18" height="40" rx="8"/>
+    <rect x="354" y="248" width="18" height="40" rx="8"/>
+  </g>
+</svg>
