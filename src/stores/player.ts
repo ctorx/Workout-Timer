@@ -11,8 +11,9 @@
  *   previous boundary, so long background gaps land in the right state.
  * - The cursor (exerciseIndex, setIndex) always points at the set being
  *   performed or prepared. A finished set becomes `pending` while its
- *   rest runs; its rep count commits when the rest ends (or earlier via
- *   Done). Rep entry therefore never blocks the rest countdown.
+ *   rest runs; its rep count commits when the rest ends. Rest advances only
+ *   on timer expiry or transport arrows — never a Done button. After rest
+ *   between sets, a get-ready countdown starts before the next set.
  * - Every transition persists the full player state to IndexedDB so a
  *   crash, refresh, or killed tab resumes exactly.
  */
@@ -430,18 +431,6 @@ export const usePlayerStore = defineStore('player', () => {
     persistNow(); // a refresh mid-rest must not lose the adjusted count
   }
 
-  /** "Done" during rest: commit the rep count and skip the remaining rest. */
-  function finishRest(now = Date.now()): void {
-    resumeIfPaused(now);
-    if (!REST_PHASES.includes(phase.value)) return;
-    nowMs.value = now;
-    const wasSetRest = phase.value === 'rest_set';
-    commitPending(now);
-    if (wasSetRest) enterSetActive(now);
-    else enterIntro(now);
-    persistNow();
-  }
-
   /** +30 s / −15 s on the current rest countdown only. */
   function adjustRest(deltaSeconds: number, now = Date.now()): void {
     if (!REST_PHASES.includes(phase.value)) return;
@@ -675,8 +664,9 @@ export const usePlayerStore = defineStore('player', () => {
         enterSetActive(boundary, cue);
         persistNow();
       } else if (phase.value === 'rest_set') {
+        // Rest between sets: get-ready countdown before the next set starts.
         commitPending(boundary);
-        enterSetActive(boundary, cue);
+        enterIntro(boundary, false);
         persistNow();
       } else if (phase.value === 'rest_exercise') {
         commitPending(boundary);
@@ -756,7 +746,6 @@ export const usePlayerStore = defineStore('player', () => {
     skipIntro,
     completeSet,
     setReps,
-    finishRest,
     adjustRest,
     pause,
     resume,

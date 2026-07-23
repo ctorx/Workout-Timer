@@ -192,10 +192,6 @@ function primaryAction(): void {
     case 'set_active':
       player.completeSet(now);
       break;
-    case 'rest_set':
-    case 'rest_exercise':
-      player.finishRest(now);
-      break;
     case 'paused':
       player.resume(now);
       break;
@@ -215,9 +211,6 @@ const primaryLabel = computed(() => {
       return 'Skip';
     case 'set_active':
       return 'Set complete';
-    case 'rest_set':
-    case 'rest_exercise':
-      return 'Done';
     case 'paused':
       return 'Resume';
     case 'complete':
@@ -554,8 +547,9 @@ const summaryVolume = computed(() =>
           </button>
         </section>
 
-        <!-- Primary action -->
+        <!-- Primary action — hidden during rest so only the timer or arrows advance -->
         <button
+          v-if="!player.isRestPhase"
           type="button"
           class="mt-3 mb-2 w-full rounded-2xl py-5 text-xl font-bold transition-colors"
           style="min-height: 64px"
@@ -564,6 +558,14 @@ const summaryVolume = computed(() =>
         >
           {{ primaryLabel }}
         </button>
+        <div
+          v-else
+          class="mt-3 mb-2 flex w-full items-center justify-center rounded-2xl border border-border bg-surface-1 px-4 py-5 text-center text-sm text-muted"
+          style="min-height: 64px"
+          aria-live="polite"
+        >
+          Rest until the timer ends — then get ready for the next set
+        </div>
       </div>
 
       <!-- Pause overlay tint -->

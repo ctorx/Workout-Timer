@@ -91,9 +91,12 @@ await check(
   ((await page.getByLabel('Edit rep count').textContent()) ?? '').trim() === '9',
 );
 
-// 7. Done -> next set.
-await page.getByRole('button', { name: 'Done', exact: true }).click();
-await page.waitForTimeout(200);
+// 7. Rest advances only via the timer (or arrows) — expire rest with −15s.
+for (let i = 0; i < 12; i++) {
+  await page.getByRole('button', { name: '−15s' }).click();
+}
+await check('Get ready for next set', await visible(page.getByText('Get ready', { exact: true })));
+await page.getByRole('button', { name: 'Skip', exact: true }).click();
 await check(
   'Back to work (set 2)',
   ((await page.getByRole('status').textContent()) ?? '').includes('set 2 of 3'),

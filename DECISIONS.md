@@ -64,6 +64,10 @@ up. Section references are to the build prompt (`plan.md`).
   adjust the final set's count before *Save & finish*. This is the only place
   reps are editable after commit; rewinding out of `complete` stays
   unsupported per §6.
+- **Rest has no Done / skip-rest primary button.** Logging reps during rest
+  never advances; the countdown (or transport arrows) advances. After a
+  between-set rest ends, a get-ready countdown runs before the next set so
+  there is a clear start-set timer. (Overrides plan §6 “Done skips rest”.)
 - **The start sheet's "Start workout" tap is the audio-unlocking gesture and
   starts the player directly.** The player's `idle` pre-flight state (with
   its own Start button, also unlocking audio) appears only when navigating to

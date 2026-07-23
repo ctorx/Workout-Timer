@@ -96,8 +96,11 @@ describe('the full happy path', () => {
     expect(p.remainingMs).toBe(60_000);
     expect(p.setIndex).toBe(1); // cursor is on the next set during rest
 
-    // rest runs to zero -> auto-commits target reps
+    // rest runs to zero -> get-ready countdown for the next set
     t += 60_000;
+    p.tick(t);
+    expect(p.phase).toBe('exercise_intro');
+    t += INTRO_MS;
     p.tick(t);
     expect(p.phase).toBe('set_active');
 
@@ -155,30 +158,31 @@ describe('rep logging during rest', () => {
     return t;
   }
 
-  it('pre-fills target reps and commits the stepper value on Done, skipping remaining rest', () => {
+  it('pre-fills target reps and stays in rest when the stepper is changed', () => {
     const p = usePlayerStore();
     const t = toFirstRest(p);
     expect(p.pendingReps).toBe(8);
     p.setReps(6);
-    p.finishRest(t + 25_000);
-    expect(p.phase).toBe('set_active');
-    const log = p.session!.exercises[0]!.sets[0]!;
-    expect(log.actualReps).toBe(6);
-    expect(log.restSeconds).toBe(25); // actual rest taken, not planned
+    p.tick(t + 25_000);
+    expect(p.phase).toBe('rest_set'); // changing reps never advances
+    expect(p.pendingReps).toBe(6);
   });
 
-  it('auto-commits the displayed value when rest reaches 0 untouched', () => {
+  it('auto-commits the displayed value when rest reaches 0, then starts get-ready', () => {
     const p = usePlayerStore();
     const t = toFirstRest(p);
+    p.setReps(6);
     p.tick(t + 60_000);
-    expect(p.session!.exercises[0]!.sets[0]!.actualReps).toBe(8);
+    expect(p.session!.exercises[0]!.sets[0]!.actualReps).toBe(6);
+    expect(p.session!.exercises[0]!.sets[0]!.restSeconds).toBe(60);
+    expect(p.phase).toBe('exercise_intro');
   });
 
-  it('a stepper value of 0 records the set as skipped', () => {
+  it('a stepper value of 0 records the set as skipped when rest ends', () => {
     const p = usePlayerStore();
     const t = toFirstRest(p);
     p.setReps(0);
-    p.finishRest(t + 10_000);
+    p.tick(t + 60_000);
     expect(p.session!.exercises[0]!.sets[0]!.outcome).toBe('skipped');
   });
 });
@@ -206,8 +210,9 @@ describe('zero-length rests pass straight through', () => {
     p.tick(T0 + INTRO_MS);
     let t = T0 + INTRO_MS;
     p.completeSet((t += 10_000)); // set 1 -> rest_set
-    p.tick((t += 60_000)); // -> set 2
-    p.completeSet((t += 10_000)); // last set, zero rest after
+    p.tick((t += 60_000)); // rest ends → get ready for set 2
+    p.tick((t += INTRO_MS)); // set 2 active
+    p.completeSet((t += 10_000)); // last set, zero rest after → next exercise intro
     expect(p.phase).toBe('exercise_intro');
     expect(p.exerciseIndex).toBe(1);
   });
@@ -236,7 +241,7 @@ describe('pause and resume', () => {
     p.tick(resumeAt + 19_999);
     expect(p.phase).toBe('rest_set');
     p.tick(resumeAt + 20_000);
-    expect(p.phase).toBe('set_active');
+    expect(p.phase).toBe('exercise_intro'); // get ready for the next set
   });
 
   it('freezes an elapsed work timer and excludes paused time from workSeconds', () => {
@@ -258,11 +263,11 @@ describe('backgrounded expiry and multi-boundary catch-up', () => {
     p.tick(T0 + INTRO_MS);
     p.completeSet(T0 + INTRO_MS + 10_000);
     const restStart = T0 + INTRO_MS + 10_000;
-    // Backgrounded for far longer than the 60 s rest.
+    // Backgrounded for far longer than the 60 s rest + 5 s get-ready.
     p.tick(restStart + 600_000);
     expect(p.phase).toBe('set_active');
-    // The set's clock started at the rest boundary, not at return time.
-    expect(p.elapsedMs).toBe(600_000 - 60_000);
+    // Work clock started after rest + get-ready, not at return time.
+    expect(p.elapsedMs).toBe(600_000 - 60_000 - INTRO_MS);
     expect(p.session!.exercises[0]!.sets[0]!.restSeconds).toBe(60);
   });
 
@@ -272,7 +277,10 @@ describe('backgrounded expiry and multi-boundary catch-up', () => {
     p.tick(T0 + INTRO_MS);
     let t = T0 + INTRO_MS;
     p.completeSet((t += 10_000)); // rest_set 60 s
-    p.tick((t += 60_000)); // set 2
+    p.tick((t += 60_000)); // get ready for set 2
+    expect(p.phase).toBe('exercise_intro');
+    p.tick((t += INTRO_MS)); // set 2 active
+    expect(p.phase).toBe('set_active');
     p.completeSet((t += 10_000)); // rest_exercise 120 s
     const restStart = t;
 
@@ -296,7 +304,8 @@ describe('transport controls', () => {
     const t = toSetActive(p);
     p.skipSet(t + 5_000);
     expect(p.phase).toBe('rest_set'); // same transition as a completed set
-    p.finishRest(t + 6_000);
+    p.tick(t + 5_000 + 60_000); // rest ends → get ready
+    expect(p.phase).toBe('exercise_intro');
     const log = p.session!.exercises[0]!.sets[0]!;
     expect(log.outcome).toBe('skipped');
     expect(log.actualReps).toBe(0);
@@ -371,7 +380,8 @@ describe('transport controls', () => {
     const p = usePlayerStore();
     let t = toSetActive(p);
     p.completeSet((t += 10_000));
-    p.tick((t += 60_000));
+    p.tick((t += 60_000)); // rest ends → get ready for set 2
+    p.tick((t += INTRO_MS)); // set 2 active
     p.completeSet((t += 10_000)); // -> rest_exercise, cursor on exercise 2
     p.tick((t += 120_000)); // exercise 2 intro
     p.tick((t += INTRO_MS)); // exercise 2 set active
@@ -411,7 +421,7 @@ describe('rest adjustments', () => {
     p.completeSet(t);
     p.tick(t + 55_000); // 5 s remaining
     p.adjustRest(-15, t + 55_000);
-    expect(p.phase).toBe('set_active');
+    expect(p.phase).toBe('exercise_intro'); // get ready for the next set
     expect(p.session!.exercises[0]!.sets).toHaveLength(1);
   });
 });
@@ -461,7 +471,7 @@ describe('single exercise, single set (edge 11.1)', () => {
 });
 
 describe('audio cue events', () => {
-  it('emits beep at 3, 2, 1 and go at 0 during a rest countdown', () => {
+  it('emits beep at 3, 2, 1 during rest, then go when get-ready ends', () => {
     const p = usePlayerStore();
     const events: string[] = [];
     p.onEvent((e) => events.push(e));
@@ -471,10 +481,10 @@ describe('audio cue events', () => {
     p.completeSet(t);
     events.length = 0; // ignore start/intro cues
 
-    // Render loop at 100 ms from 4 s remaining through expiry.
-    for (let ms = 56_000; ms <= 60_100; ms += 100) p.tick(t + ms);
+    // Through rest expiry (beeps) and the following get-ready countdown (go).
+    for (let ms = 56_000; ms <= 60_000 + INTRO_MS + 100; ms += 100) p.tick(t + ms);
 
-    expect(events.filter((e) => e === 'beep')).toHaveLength(3);
+    expect(events.filter((e) => e === 'beep')).toHaveLength(6); // 3 during rest + 3 during get-ready
     expect(events.filter((e) => e === 'go')).toHaveLength(1);
     expect(events[events.length - 1]).toBe('go');
   });
