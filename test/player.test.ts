@@ -93,20 +93,9 @@ describe('simple loop', () => {
     expect(p.setIndex).toBe(1);
   });
 
-  it('same behavior between exercises', () => {
-    const p = usePlayerStore();
-    let t = beginFirstSet(p);
-    p.skipExercise(t + 1_000); // skip to exercise 2 awaiting... wait skip goes to awaiting for next ex
-    // Actually skip exercise from set 1 of ex1 goes to awaiting_set for ex2
-    expect(p.phase).toBe('awaiting_set');
-    expect(p.exerciseIndex).toBe(1);
-    p.startNextSet(t + 2_000);
-    expect(p.phase).toBe('set_active');
-
-    // Through rest_exercise path properly:
-    setActivePinia(createPinia());
+  it('same rest→alarm behavior between exercises', () => {
     const q = usePlayerStore();
-    t = beginFirstSet(q);
+    let t = beginFirstSet(q);
     q.completeSet(t + 10_000);
     q.tick(t + 10_000 + 60_000);
     q.startNextSet(t + 10_000 + 60_000 + 500);
@@ -118,6 +107,45 @@ describe('simple loop', () => {
     expect(q.exerciseIndex).toBe(1);
     q.startNextSet(awaitAt + 500);
     expect(q.phase).toBe('set_active');
+  });
+
+  it('skip set never rests and never alarms', () => {
+    const p = usePlayerStore();
+    const events: string[] = [];
+    p.onEvent((e) => events.push(e));
+    const t = beginFirstSet(p);
+    p.skipSet(t + 5_000);
+    expect(p.phase).toBe('set_active');
+    expect(p.setIndex).toBe(1);
+    expect(p.session!.exercises[0]!.sets[0]!.outcome).toBe('skipped');
+    expect(events.filter((e) => e === 'alarm')).toHaveLength(0);
+  });
+
+  it('skip from rest leaves rest and starts the next work set with no alarm', () => {
+    const p = usePlayerStore();
+    const events: string[] = [];
+    p.onEvent((e) => events.push(e));
+    const t = beginFirstSet(p);
+    p.completeSet(t + 10_000);
+    expect(p.phase).toBe('rest_set');
+    events.length = 0;
+    p.skipSet(t + 15_000); // skip upcoming set 2 while resting
+    expect(p.phase).toBe('set_active'); // jumped to next exercise set 0 (only 2 sets on ex1)
+    expect(p.exerciseIndex).toBe(1);
+    expect(p.setIndex).toBe(0);
+    expect(events.filter((e) => e === 'alarm')).toHaveLength(0);
+  });
+
+  it('skip exercise jumps to next exercise work with no rest or alarm', () => {
+    const p = usePlayerStore();
+    const events: string[] = [];
+    p.onEvent((e) => events.push(e));
+    const t = beginFirstSet(p);
+    p.skipExercise(t + 1_000);
+    expect(p.phase).toBe('set_active');
+    expect(p.exerciseIndex).toBe(1);
+    expect(p.setIndex).toBe(0);
+    expect(events.filter((e) => e === 'alarm')).toHaveLength(0);
   });
 
   it('full workout end to end', () => {

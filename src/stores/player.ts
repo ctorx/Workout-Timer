@@ -7,7 +7,9 @@
  *   next set_active → …
  *
  * Rest never auto-starts the next set. Alarm keeps firing until the user
- * taps Stop alarm. Time is wall-clock based (no setInterval accumulation).
+ * taps Stop alarm. Skip set / skip exercise never enter rest and never
+ * ring the alarm — they jump straight to the next set or exercise.
+ * Time is wall-clock based (no setInterval accumulation).
  */
 import { computed, ref } from 'vue';
 import { defineStore } from 'pinia';
@@ -486,71 +488,98 @@ export const usePlayerStore = defineStore('player', () => {
     persistNow();
   }
 
-  /** ▶ Log the current set as skipped and advance as if completed. */
+  function writeSkippedSet(exIdx: number, setIdx: number, now: number): void {
+    const s = session.value;
+    const ex = workout.value?.exercises[exIdx];
+    const exLog = s?.exercises[exIdx];
+    if (!s || !ex || !exLog) return;
+    exLog.sets = exLog.sets
+      .filter((x) => x.setIndex !== setIdx)
+      .concat([
+        {
+          setIndex: setIdx,
+          targetReps: ex.targetReps,
+          actualReps: 0,
+          weight: ex.weight,
+          unit: ex.unit,
+          outcome: 'skipped',
+          startedAt: iso(now),
+          completedAt: iso(now),
+          workSeconds: 0,
+          restSeconds: 0,
+        },
+      ])
+      .sort((a, b) => a.setIndex - b.setIndex);
+  }
+
+  /**
+   * After a skip: never rest, never alarm — jump straight into the next
+   * set/exercise work timer (or complete).
+   */
+  function advanceAfterSkip(now: number): void {
+    const w = workout.value;
+    const ex = currentExercise.value;
+    if (!w || !ex) return;
+    restStartedAt.value = null;
+    pending.value = null;
+
+    if (setIndex.value < ex.sets - 1) {
+      setIndex.value += 1;
+      enterSetActive(now, false);
+      persistNow();
+      return;
+    }
+    if (exerciseIndex.value < w.exercises.length - 1) {
+      exerciseIndex.value += 1;
+      setIndex.value = 0;
+      enterSetActive(now, false);
+      emit('new_exercise');
+      persistNow();
+      return;
+    }
+    goComplete(now);
+  }
+
+  /**
+   * ▶ Skip the current set (or the set you're about to do during rest/alarm).
+   * Never enters rest and never rings the alarm.
+   */
   function skipSet(now = Date.now()): void {
     resumeIfPaused(now);
     if (!isRunning.value || phase.value === 'idle') return;
     const ex = currentExercise.value;
     if (!ex) return;
     nowMs.value = now;
-    // A rest in progress belongs to the previous set — commit it first.
+    // Finish logging the set we just left, if rest had started.
     if (pending.value) commitPending(now);
-    const startedAtMs =
-      phase.value === 'set_active' && timer.value.startedAt !== null ? timer.value.startedAt : now;
-    pending.value = {
-      exerciseIndex: exerciseIndex.value,
-      setIndex: setIndex.value,
-      targetReps: ex.targetReps,
-      weight: ex.weight,
-      unit: ex.unit,
-      startedAt: iso(startedAtMs),
-      completedAt: iso(now),
-      workSeconds: Math.max(0, Math.round((now - startedAtMs) / 1000)),
-      skipped: true,
-    };
-    pendingReps.value = 0;
-    advanceAfterSet(now);
+    writeSkippedSet(exerciseIndex.value, setIndex.value, now);
+    advanceAfterSkip(now);
   }
 
-  /** ⏭ Log every remaining set of the current exercise as skipped. */
+  /**
+   * ⏭ Skip the rest of this exercise. Lands on the next exercise's first
+   * set in work mode — no rest, no alarm.
+   */
   function skipExercise(now = Date.now()): void {
     resumeIfPaused(now);
     if (!isRunning.value || phase.value === 'idle') return;
     const w = workout.value;
-    const s = session.value;
     const ex = currentExercise.value;
-    if (!w || !s || !ex) return;
+    if (!w || !ex) return;
     nowMs.value = now;
     if (pending.value) commitPending(now);
-    const exLog = s.exercises[exerciseIndex.value];
-    if (exLog) {
-      for (let i = setIndex.value; i < ex.sets; i++) {
-        exLog.sets = exLog.sets
-          .filter((x) => x.setIndex !== i)
-          .concat([
-            {
-              setIndex: i,
-              targetReps: ex.targetReps,
-              actualReps: 0,
-              weight: ex.weight,
-              unit: ex.unit,
-              outcome: 'skipped',
-              startedAt: iso(now),
-              completedAt: iso(now),
-              workSeconds: 0,
-              restSeconds: 0,
-            },
-          ])
-          .sort((a, b) => a.setIndex - b.setIndex);
-      }
+    for (let i = setIndex.value; i < ex.sets; i++) {
+      writeSkippedSet(exerciseIndex.value, i, now);
     }
+    restStartedAt.value = null;
+    pending.value = null;
     if (exerciseIndex.value >= w.exercises.length - 1) {
       goComplete(now);
       return;
     }
     exerciseIndex.value += 1;
     setIndex.value = 0;
-    enterAwaitingSet(now);
+    enterSetActive(now, false);
     emit('new_exercise');
     persistNow();
   }
