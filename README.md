@@ -64,10 +64,8 @@ test/                    Vitest suites driven with an explicit mocked clock
 
 `stores/player.ts` is a headless Pinia store — the player screen only renders
 store state and dispatches actions. States:
-`awaiting_set → set_active → rest → awaiting_set → … → complete`,
-with `paused` as an overlay and `abandoned` as the terminal stop state.
-Rest never auto-starts the next set: when rest hits 0 the alarm keeps going
-until you tap **Start next set**.
+`set_active → rest → alarm → set_active → … → complete`.
+Rest ticks at 3–2–1, alarms at 0 until you tap **Stop alarm** (starts the next set).
 
 Timing rules:
 

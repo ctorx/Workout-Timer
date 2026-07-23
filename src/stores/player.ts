@@ -1,19 +1,13 @@
 /**
  * The player: a headless finite state machine driving the workout.
  *
- * Fluid flow:
- *   awaiting_set (alarm) → Start next set → set_active (work timer) →
- *   Set complete → rest (log reps) → rest ends → awaiting_set → …
+ * Simple loop (same between sets and between exercises):
+ *   set_active (work timer) → Set complete → rest (enter reps) →
+ *   ticks at 3, 2, 1 → alarm at 0 (awaiting_set) → user stops alarm →
+ *   next set_active → …
  *
- * Timing rules:
- * - Never accumulate time from interval ticks. Countdowns store absolute
- *   `endsAt`; elapsed timers store `startedAt`. `tick(now)` derives from
- *   the wall clock so backgrounded tabs reconcile exactly.
- * - Rest never auto-starts the next set. When rest hits 0 (beeps from 5s),
- *   we enter `awaiting_set` and keep alarming until the user taps
- *   Start next set — that stops the alarm and starts the work timer.
- * - Transport arrows may still jump; there is no Done button.
- * - Full player state persists to IndexedDB on every transition.
+ * Rest never auto-starts the next set. Alarm keeps firing until the user
+ * taps Stop alarm. Time is wall-clock based (no setInterval accumulation).
  */
 import { computed, ref } from 'vue';
 import { defineStore } from 'pinia';
@@ -34,11 +28,13 @@ import {
   savePlayerState,
   StorageWriteError,
 } from '@/lib/persistence';
-import { useSettingsStore } from '@/stores/settings';
 import { useSessionsStore } from '@/stores/sessions';
 
-/** How often the awaiting-set alarm re-fires (ms). */
-export const ALARM_INTERVAL_MS = 1500;
+/** How often the post-rest alarm re-fires until the user stops it. */
+export const ALARM_INTERVAL_MS = 1000;
+
+/** Rest countdown ticks — always 3, 2, 1 then alarm at 0. */
+export const REST_TICKS_AT = [3, 2, 1];
 
 export type PlayerEventType = 'beep' | 'go' | 'alarm' | 'new_exercise' | 'complete';
 
@@ -399,19 +395,20 @@ export const usePlayerStore = defineStore('player', () => {
     pausedFrom.value = null;
     storageError.value = null;
     nowMs.value = now;
-    enterAwaitingSet(now, false); // user just tapped Start workout; wait for Start set
+    // First set starts immediately on Start workout (the tap is the start signal).
+    enterSetActive(now);
     persistNow();
     return true;
   }
 
   /**
-   * User stops the post-rest alarm and begins the set. Work timer starts here.
+   * User stops the post-rest alarm; the next set's work timer starts here.
    */
   function startNextSet(now = Date.now()): void {
     resumeIfPaused(now);
     if (phase.value !== 'awaiting_set' && phase.value !== 'exercise_intro') return;
     nowMs.value = now;
-    enterSetActive(now);
+    enterSetActive(now, false); // user gesture stops the alarm; no extra go blip
     persistNow();
   }
 
@@ -673,26 +670,25 @@ export const usePlayerStore = defineStore('player', () => {
       guard++ < 10_000
     ) {
       const boundary = timer.value.endsAt;
-      const cue = now - boundary < 1500; // stale cues stay silent
+      // Rest hitting 0 always alarms — that is the signal to get up.
       if (phase.value === 'rest_set') {
         commitPending(boundary);
-        enterAwaitingSet(boundary, cue);
+        enterAwaitingSet(boundary, true);
         persistNow();
       } else if (phase.value === 'rest_exercise') {
         commitPending(boundary);
-        enterAwaitingSet(boundary, cue);
-        if (cue) emit('new_exercise');
+        enterAwaitingSet(boundary, true);
+        emit('new_exercise');
         persistNow();
       } else if (phase.value === 'exercise_intro') {
-        // Legacy: old sessions that auto-advanced. Park on awaiting_set.
-        enterAwaitingSet(boundary, cue);
+        enterAwaitingSet(boundary, true);
         persistNow();
       } else {
         break;
       }
     }
 
-    // Countdown beeps (default from 5s) once per second during rest.
+    // Rest ticks at 3, 2, 1 — then alarm takes over at 0.
     if (
       timer.value.kind === 'countdown' &&
       timer.value.endsAt !== null &&
@@ -701,17 +697,16 @@ export const usePlayerStore = defineStore('player', () => {
       const secondsLeft = Math.ceil((timer.value.endsAt - now) / 1000);
       if (secondsLeft !== lastCueSecond) {
         lastCueSecond = secondsLeft;
-        const beepsAt = useSettingsStore().settings.countdownBeepsAt;
-        if (secondsLeft > 0 && beepsAt.includes(secondsLeft)) emit('beep');
+        if (secondsLeft > 0 && REST_TICKS_AT.includes(secondsLeft)) emit('beep');
       }
     }
 
-    // Awaiting-set alarm: keep firing until the user starts the set.
+    // Alarm at 0: keep firing until the user stops it (Start next set).
     if (phase.value === 'awaiting_set' && timer.value.startedAt !== null) {
       const pulse = Math.floor((now - timer.value.startedAt) / ALARM_INTERVAL_MS);
       if (pulse > lastAlarmPulse) {
         lastAlarmPulse = pulse;
-        if (pulse > 0) emit('alarm'); // pulse 0 already cued on enter
+        if (pulse > 0) emit('alarm');
       }
     }
 

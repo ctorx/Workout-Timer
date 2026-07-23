@@ -9,11 +9,26 @@ export const DEFAULT_SETTINGS: Settings = {
   soundEnabled: true,
   vibrationEnabled: true,
   keepScreenAwake: true,
-  countdownBeepsAt: [5, 4, 3, 2, 1],
+  countdownBeepsAt: [3, 2, 1],
   theme: 'dark',
 };
 
 let mediaListenerAttached = false;
+
+/** Prefer the simple 3-2-1 rest ticks if the user still has an older default. */
+function normalizeSettings(raw: Partial<Settings> | null): Settings {
+  const merged = { ...DEFAULT_SETTINGS, ...(raw ?? {}) };
+  const beeps = merged.countdownBeepsAt;
+  if (
+    Array.isArray(beeps) &&
+    beeps.length === 5 &&
+    beeps[0] === 5 &&
+    beeps[1] === 4
+  ) {
+    merged.countdownBeepsAt = [3, 2, 1];
+  }
+  return merged;
+}
 
 function applyTheme(theme: Settings['theme']): void {
   if (typeof document === 'undefined') return;
@@ -28,15 +43,17 @@ function applyTheme(theme: Settings['theme']): void {
 
 export const useSettingsStore = defineStore('settings', {
   state: (): { settings: Settings } => ({
-    settings: { ...DEFAULT_SETTINGS, ...(readLocal<Partial<Settings>>(LS_KEYS.settings) ?? {}) },
+    settings: normalizeSettings(readLocal<Partial<Settings>>(LS_KEYS.settings)),
   }),
   actions: {
     update(patch: Partial<Settings>) {
-      this.settings = { ...this.settings, ...patch };
+      this.settings = normalizeSettings({ ...this.settings, ...patch });
       writeLocal(LS_KEYS.settings, this.settings);
       if (patch.theme !== undefined) applyTheme(this.settings.theme);
     },
     initTheme() {
+      // Persist normalized beeps so older [5,4,3,2,1] installs become 3-2-1.
+      writeLocal(LS_KEYS.settings, this.settings);
       applyTheme(this.settings.theme);
       if (!mediaListenerAttached && typeof window.matchMedia === 'function') {
         window

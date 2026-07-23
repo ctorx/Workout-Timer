@@ -110,7 +110,7 @@ const phaseLabel = computed(() => {
   switch (phase.value) {
     case 'awaiting_set':
     case 'exercise_intro':
-      return 'Up next';
+      return 'Alarm';
     case 'set_active':
       return 'Work';
     case 'rest_set':
@@ -150,7 +150,7 @@ const announcement = computed(() => {
   switch (phase.value) {
     case 'awaiting_set':
     case 'exercise_intro':
-      return `Rest over. Start next set: ${ex.value?.name ?? ''}, set ${player.setIndex + 1} of ${ex.value?.sets ?? 0}`;
+      return `Rest over — stop the alarm to begin set ${player.setIndex + 1} of ${ex.value?.sets ?? 0}, ${ex.value?.name ?? ''}`;
     case 'set_active':
       return `Working set ${player.setIndex + 1} of ${ex.value?.sets ?? 0}, ${ex.value?.name ?? ''}`;
     case 'rest_set':
@@ -221,7 +221,7 @@ const primaryLabel = computed(() => {
       return 'Start workout';
     case 'awaiting_set':
     case 'exercise_intro':
-      return 'Start next set';
+      return 'Stop alarm';
     case 'set_active':
       return 'Set complete';
     case 'paused':
@@ -478,7 +478,7 @@ const summaryVolume = computed(() =>
                 v-if="(phase === 'rest_exercise' || phase === 'awaiting_set') && ex"
                 class="mt-1 max-w-[200px] truncate text-xs text-muted"
               >
-                {{ phase === 'awaiting_set' ? 'Tap below to begin' : `Next: ${ex.name}` }}
+                {{ phase === 'awaiting_set' ? 'Stop alarm to begin' : `Next: ${ex.name}` }}
               </p>
             </div>
           </ProgressRing>
@@ -578,7 +578,7 @@ const summaryVolume = computed(() =>
           style="min-height: 64px"
           aria-live="polite"
         >
-          Log reps · rest ends at 0 · then Start next set
+          Log reps · ticks at 3 · alarm at 0
         </div>
       </div>
 

@@ -64,11 +64,10 @@ up. Section references are to the build prompt (`plan.md`).
   adjust the final set's count before *Save & finish*. This is the only place
   reps are editable after commit; rewinding out of `complete` stays
   unsupported per §6.
-- **Rest has no Done button.** After Set complete, rest runs with the rep
-  stepper; beeps from 5s. When rest hits 0 the app enters `awaiting_set` and
-  keeps alarming until the user taps **Start next set** — that stops the
-  alarm and starts the work timer. Rest never auto-starts the next set.
-  (Overrides plan §6 Done-skips-rest and auto-intro.)
+- **Simple rest loop.** Set complete → log reps during rest → ticks at 3, 2, 1
+  → alarm at 0 (`awaiting_set`) until the user taps **Stop alarm**, which
+  starts the next set. Same between exercises. No Done button; rest never
+  auto-starts work. (Overrides plan §6.)
 - **The start sheet's "Start workout" tap is the audio-unlocking gesture and
   starts the player directly.** The player's `idle` pre-flight state (with
   its own Start button, also unlocking audio) appears only when navigating to

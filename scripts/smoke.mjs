@@ -59,9 +59,6 @@ await check('Seed workout visible', await visible(page.getByText('Full body (sam
 await page.getByText('Full body (sample)').first().click();
 await page.getByRole('button', { name: 'Start workout' }).click();
 await page.waitForURL('**/play/**');
-await check('Awaiting first set', await visible(page.getByRole('button', { name: 'Start next set' })));
-
-await page.getByRole('button', { name: 'Start next set' }).click();
 await check('Work state', await visible(page.getByText('Work', { exact: true })));
 await check('Set complete button', await visible(page.getByRole('button', { name: 'Set complete' })));
 
@@ -84,12 +81,12 @@ await check(
   ((await page.getByLabel('Edit rep count').textContent()) ?? '').trim() === '9',
 );
 
-// Expire rest → must wait for Start next set (not auto work)
+// Expire rest → alarm until Stop alarm
 for (let i = 0; i < 12; i++) {
   await page.getByRole('button', { name: '−15s' }).click();
 }
-await check('Awaiting next set after rest', await visible(page.getByRole('button', { name: 'Start next set' })));
-await page.getByRole('button', { name: 'Start next set' }).click();
+await check('Alarm after rest', await visible(page.getByRole('button', { name: 'Stop alarm' })));
+await page.getByRole('button', { name: 'Stop alarm' }).click();
 await check(
   'Back to work (set 2)',
   ((await page.getByRole('status').textContent()) ?? '').includes('set 2 of 3'),
