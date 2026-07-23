@@ -9,6 +9,7 @@ import {
   unlockAudio,
   cueCountdownBeep,
   cueGo,
+  cueAlarm,
   cueNewExercise,
   cueComplete,
 } from '@/lib/audio';
@@ -61,12 +62,13 @@ const unsubscribe = player.onEvent((event) => {
   if (s.soundEnabled) {
     if (event === 'beep') cueCountdownBeep();
     else if (event === 'go') cueGo();
+    else if (event === 'alarm') cueAlarm();
     else if (event === 'new_exercise') cueNewExercise();
     else if (event === 'complete') cueComplete();
   }
   if (s.vibrationEnabled) {
     if (event === 'beep') haptics.beep();
-    else if (event === 'go') haptics.go();
+    else if (event === 'go' || event === 'alarm') haptics.go();
     else if (event === 'new_exercise') haptics.newExercise();
     else if (event === 'complete') haptics.complete();
   }
@@ -96,6 +98,7 @@ const phaseColor = computed(() => {
     case 'rest_set':
     case 'rest_exercise':
       return 'text-rest';
+    case 'awaiting_set':
     case 'exercise_intro':
       return 'text-transitionhue';
     default:
@@ -105,8 +108,9 @@ const phaseColor = computed(() => {
 
 const phaseLabel = computed(() => {
   switch (phase.value) {
+    case 'awaiting_set':
     case 'exercise_intro':
-      return 'Get ready';
+      return 'Up next';
     case 'set_active':
       return 'Work';
     case 'rest_set':
@@ -118,13 +122,15 @@ const phaseLabel = computed(() => {
 });
 
 const bigTime = computed(() => {
-  if (phase.value === 'set_active') return formatMmSs(player.elapsedMs);
+  if (phase.value === 'set_active' || phase.value === 'awaiting_set') {
+    return formatMmSs(player.elapsedMs);
+  }
   return formatMmSs(player.remainingMs);
 });
 
 const ringFraction = computed(() => {
-  if (phase.value === 'set_active') {
-    // No end point while lifting: the ring sweeps once per minute.
+  if (phase.value === 'set_active' || phase.value === 'awaiting_set') {
+    // No end point: the ring sweeps once per minute.
     return (player.elapsedMs % 60000) / 60000;
   }
   return player.countdownFraction;
@@ -142,8 +148,9 @@ const weightLabel = computed(() => {
 
 const announcement = computed(() => {
   switch (phase.value) {
+    case 'awaiting_set':
     case 'exercise_intro':
-      return `Get ready: ${ex.value?.name ?? ''}, set 1 of ${ex.value?.sets ?? 0}`;
+      return `Rest over. Start next set: ${ex.value?.name ?? ''}, set ${player.setIndex + 1} of ${ex.value?.sets ?? 0}`;
     case 'set_active':
       return `Working set ${player.setIndex + 1} of ${ex.value?.sets ?? 0}, ${ex.value?.name ?? ''}`;
     case 'rest_set':
@@ -186,8 +193,9 @@ function primaryAction(): void {
     case 'idle':
       startWorkout();
       break;
+    case 'awaiting_set':
     case 'exercise_intro':
-      player.skipIntro(now);
+      player.startNextSet(now);
       break;
     case 'set_active':
       player.completeSet(now);
@@ -203,12 +211,17 @@ function primaryAction(): void {
   }
 }
 
+const showPrimary = computed(
+  () => !player.isRestPhase || player.phase === 'paused',
+);
+
 const primaryLabel = computed(() => {
   switch (player.phase) {
     case 'idle':
       return 'Start workout';
+    case 'awaiting_set':
     case 'exercise_intro':
-      return 'Skip';
+      return 'Start next set';
     case 'set_active':
       return 'Set complete';
     case 'paused':
@@ -224,9 +237,7 @@ const primaryClasses = computed(() => {
   switch (player.phase) {
     case 'set_active':
       return 'bg-work text-work-ink';
-    case 'rest_set':
-    case 'rest_exercise':
-      return 'bg-rest text-rest-ink';
+    case 'awaiting_set':
     case 'exercise_intro':
       return 'bg-transitionhue text-transition-ink';
     default:
@@ -443,7 +454,7 @@ const summaryVolume = computed(() =>
           <h1 class="text-2xl font-bold tracking-tight">{{ contextExercise?.name }}</h1>
           <p class="tnum mt-1 text-sm text-muted">
             {{ weightLabel }} · Set {{ contextSetNumber }} of {{ contextExercise?.sets ?? 0 }}
-            <template v-if="phase === 'exercise_intro'">· {{ ex?.sets }}×{{ ex?.targetReps }}</template>
+            <template v-if="phase === 'awaiting_set'">· {{ ex?.sets }}×{{ ex?.targetReps }}</template>
           </p>
           <p v-if="contextExercise?.notes" class="mt-1 text-xs text-faint">
             {{ contextExercise.notes }}
@@ -463,8 +474,11 @@ const summaryVolume = computed(() =>
               >
                 {{ bigTime }}
               </p>
-              <p v-if="phase === 'rest_exercise' && ex" class="mt-1 max-w-[200px] truncate text-xs text-muted">
-                Next: {{ ex.name }}
+              <p
+                v-if="(phase === 'rest_exercise' || phase === 'awaiting_set') && ex"
+                class="mt-1 max-w-[200px] truncate text-xs text-muted"
+              >
+                {{ phase === 'awaiting_set' ? 'Tap below to begin' : `Next: ${ex.name}` }}
               </p>
             </div>
           </ProgressRing>
@@ -547,9 +561,9 @@ const summaryVolume = computed(() =>
           </button>
         </section>
 
-        <!-- Primary action — hidden during rest so only the timer or arrows advance -->
+        <!-- No Done during rest: wait for the rest timer, then Start next set -->
         <button
-          v-if="!player.isRestPhase"
+          v-if="showPrimary"
           type="button"
           class="mt-3 mb-2 w-full rounded-2xl py-5 text-xl font-bold transition-colors"
           style="min-height: 64px"
@@ -564,7 +578,7 @@ const summaryVolume = computed(() =>
           style="min-height: 64px"
           aria-live="polite"
         >
-          Rest until the timer ends — then get ready for the next set
+          Log reps · rest ends at 0 · then Start next set
         </div>
       </div>
 

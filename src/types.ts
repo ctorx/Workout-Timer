@@ -76,7 +76,8 @@ export interface Settings {
 
 export type PlayerPhase =
   | 'idle'
-  | 'exercise_intro'
+  | 'exercise_intro' // legacy (hydrated sessions map to awaiting_set)
+  | 'awaiting_set' // rest over (or workout start): alarm until user starts the set
   | 'set_active'
   | 'rest_set'
   | 'rest_exercise'

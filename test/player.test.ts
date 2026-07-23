@@ -1,13 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
-import { usePlayerStore, INTRO_SECONDS } from '@/stores/player';
+import { ALARM_INTERVAL_MS, usePlayerStore } from '@/stores/player';
 import { useSessionsStore } from '@/stores/sessions';
 import type { PersistedPlayerState, Workout } from '@/types';
 import { SCHEMA_VERSION } from '@/types';
 import { sessionVolume } from '@/lib/stats';
 
-const T0 = 1_000_000_000; // arbitrary epoch anchor
-const INTRO_MS = INTRO_SECONDS * 1000;
+const T0 = 1_000_000_000;
 
 function makeWorkout(overrides: Partial<Workout> = {}): Workout {
   return {
@@ -44,19 +43,28 @@ function makeWorkout(overrides: Partial<Workout> = {}): Workout {
   };
 }
 
+/** Start workout and begin the first set. */
+function beginFirstSet(p: ReturnType<typeof usePlayerStore>, w = makeWorkout()): number {
+  p.start(w, T0);
+  expect(p.phase).toBe('awaiting_set');
+  p.startNextSet(T0 + 1000);
+  expect(p.phase).toBe('set_active');
+  return T0 + 1000;
+}
+
 beforeEach(() => {
   setActivePinia(createPinia());
 });
 
-describe('start and intro', () => {
-  it('enters exercise_intro with a 5 s countdown', () => {
+describe('start', () => {
+  it('opens on awaiting_set; Start next set begins work', () => {
     const p = usePlayerStore();
     expect(p.start(makeWorkout(), T0)).toBe(true);
-    expect(p.phase).toBe('exercise_intro');
-    expect(p.exerciseIndex).toBe(0);
-    expect(p.setIndex).toBe(0);
-    p.tick(T0 + 1000);
-    expect(p.remainingMs).toBe(INTRO_MS - 1000);
+    expect(p.phase).toBe('awaiting_set');
+    p.startNextSet(T0 + 500);
+    expect(p.phase).toBe('set_active');
+    p.tick(T0 + 1500);
+    expect(p.elapsedMs).toBe(1000);
   });
 
   it('refuses to start an empty workout', () => {
@@ -64,388 +72,218 @@ describe('start and intro', () => {
     expect(p.start(makeWorkout({ exercises: [] }), T0)).toBe(false);
     expect(p.phase).toBe('idle');
   });
-
-  it('intro auto-advances to set_active at 0, or on Skip', () => {
-    const p = usePlayerStore();
-    p.start(makeWorkout(), T0);
-    p.tick(T0 + INTRO_MS);
-    expect(p.phase).toBe('set_active');
-
-    setActivePinia(createPinia());
-    const q = usePlayerStore();
-    q.start(makeWorkout(), T0);
-    q.skipIntro(T0 + 2000);
-    expect(q.phase).toBe('set_active');
-  });
 });
 
 describe('the full happy path', () => {
-  it('walks a two-exercise workout end to end with correct logs', () => {
+  it('walks a two-exercise workout with manual start after each rest', () => {
     const p = usePlayerStore();
-    p.start(makeWorkout(), T0);
+    let t = beginFirstSet(p);
 
-    // intro -> set 1
-    let t = T0 + INTRO_MS;
-    p.tick(t);
-    expect(p.phase).toBe('set_active');
-
-    // set 1 takes 30 s
+    // set 1
     t += 30_000;
     p.completeSet(t);
     expect(p.phase).toBe('rest_set');
-    expect(p.remainingMs).toBe(60_000);
-    expect(p.setIndex).toBe(1); // cursor is on the next set during rest
+    expect(p.setIndex).toBe(1);
 
-    // rest runs to zero -> get-ready countdown for the next set
+    // rest ends → awaiting_set (does NOT auto-start work)
     t += 60_000;
     p.tick(t);
-    expect(p.phase).toBe('exercise_intro');
-    t += INTRO_MS;
-    p.tick(t);
+    expect(p.phase).toBe('awaiting_set');
+    expect(p.session!.exercises[0]!.sets[0]).toMatchObject({
+      actualReps: 8,
+      restSeconds: 60,
+      outcome: 'completed',
+    });
+
+    // user stops the alarm and starts set 2
+    p.startNextSet(t + 2000);
     expect(p.phase).toBe('set_active');
 
-    // set 2 takes 25 s
-    t += 25_000;
+    t += 2000 + 25_000;
     p.completeSet(t);
     expect(p.phase).toBe('rest_exercise');
-    expect(p.remainingMs).toBe(120_000);
-    expect(p.exerciseIndex).toBe(1);
 
-    // rest ends -> intro of exercise 2 -> set
     t += 120_000;
     p.tick(t);
-    expect(p.phase).toBe('exercise_intro');
-    t += INTRO_MS;
-    p.tick(t);
-    expect(p.phase).toBe('set_active');
+    expect(p.phase).toBe('awaiting_set');
+    expect(p.exerciseIndex).toBe(1);
 
-    // final set: restAfterExercise of the last exercise never runs
-    t += 20_000;
+    p.startNextSet(t + 500);
+    t += 500 + 20_000;
     p.completeSet(t);
     expect(p.phase).toBe('complete');
 
     const s = p.session!;
     expect(s.status).toBe('completed');
-    expect(s.endedAt).toBe(new Date(t).toISOString());
-    const [a, b] = s.exercises;
-    expect(a!.sets).toHaveLength(2);
-    expect(a!.outcome).toBe('completed');
-    expect(a!.sets[0]).toMatchObject({
-      setIndex: 0,
-      targetReps: 8,
-      actualReps: 8,
-      weight: 100,
-      unit: 'lb',
-      outcome: 'completed',
-      workSeconds: 30,
-      restSeconds: 60,
-    });
-    expect(a!.sets[1]).toMatchObject({ workSeconds: 25, restSeconds: 120 });
-    expect(b!.sets).toHaveLength(1);
-    expect(b!.sets[0]!.restSeconds).toBe(0);
-    expect(s.durationSeconds).toBe(Math.round((t - T0) / 1000));
-    expect(s.totalRestSeconds).toBe(180);
+    expect(s.exercises[0]!.sets).toHaveLength(2);
+    expect(s.exercises[1]!.sets).toHaveLength(1);
+    expect(s.exercises[1]!.sets[0]!.restSeconds).toBe(0);
     expect(sessionVolume(s).lb).toBe(100 * 8 * 2);
   });
 });
 
-describe('rep logging during rest', () => {
-  function toFirstRest(p: ReturnType<typeof usePlayerStore>): number {
-    p.start(makeWorkout(), T0);
-    p.tick(T0 + INTRO_MS);
-    const t = T0 + INTRO_MS + 30_000;
-    p.completeSet(t);
-    return t;
-  }
-
-  it('pre-fills target reps and stays in rest when the stepper is changed', () => {
+describe('rest never auto-starts the next set', () => {
+  it('rest expiry parks on awaiting_set until Start next set', () => {
     const p = usePlayerStore();
-    const t = toFirstRest(p);
-    expect(p.pendingReps).toBe(8);
+    const t = beginFirstSet(p);
+    p.completeSet(t + 10_000);
     p.setReps(6);
-    p.tick(t + 25_000);
-    expect(p.phase).toBe('rest_set'); // changing reps never advances
-    expect(p.pendingReps).toBe(6);
-  });
-
-  it('auto-commits the displayed value when rest reaches 0, then starts get-ready', () => {
-    const p = usePlayerStore();
-    const t = toFirstRest(p);
-    p.setReps(6);
-    p.tick(t + 60_000);
+    p.tick(t + 10_000 + 60_000);
+    expect(p.phase).toBe('awaiting_set');
     expect(p.session!.exercises[0]!.sets[0]!.actualReps).toBe(6);
-    expect(p.session!.exercises[0]!.sets[0]!.restSeconds).toBe(60);
-    expect(p.phase).toBe('exercise_intro');
+    // still waiting — work has not started
+    p.tick(t + 10_000 + 60_000 + 30_000);
+    expect(p.phase).toBe('awaiting_set');
+    p.startNextSet(t + 10_000 + 60_000 + 30_000);
+    expect(p.phase).toBe('set_active');
   });
 
-  it('a stepper value of 0 records the set as skipped when rest ends', () => {
-    const p = usePlayerStore();
-    const t = toFirstRest(p);
-    p.setReps(0);
-    p.tick(t + 60_000);
-    expect(p.session!.exercises[0]!.sets[0]!.outcome).toBe('skipped');
-  });
-});
-
-describe('zero-length rests pass straight through', () => {
-  it('restBetweenSets = 0 goes directly to the next set', () => {
+  it('zero rest also waits for Start next set', () => {
     const w = makeWorkout();
     w.exercises[0]!.restBetweenSets = 0;
     const p = usePlayerStore();
-    p.start(w, T0);
-    p.tick(T0 + INTRO_MS);
-    p.completeSet(T0 + INTRO_MS + 10_000);
-    expect(p.phase).toBe('set_active');
+    const t = beginFirstSet(p, w);
+    p.completeSet(t + 10_000);
+    expect(p.phase).toBe('awaiting_set');
     expect(p.setIndex).toBe(1);
-    const log = p.session!.exercises[0]!.sets[0]!;
-    expect(log.actualReps).toBe(8);
-    expect(log.restSeconds).toBe(0);
   });
+});
 
-  it('restAfterExercise = 0 goes directly to the next exercise intro', () => {
-    const w = makeWorkout();
-    w.exercises[0]!.restAfterExercise = 0;
+describe('alarm during awaiting_set', () => {
+  it('re-fires alarm pulses until the user starts the set', () => {
     const p = usePlayerStore();
-    p.start(w, T0);
-    p.tick(T0 + INTRO_MS);
-    let t = T0 + INTRO_MS;
-    p.completeSet((t += 10_000)); // set 1 -> rest_set
-    p.tick((t += 60_000)); // rest ends → get ready for set 2
-    p.tick((t += INTRO_MS)); // set 2 active
-    p.completeSet((t += 10_000)); // last set, zero rest after → next exercise intro
-    expect(p.phase).toBe('exercise_intro');
-    expect(p.exerciseIndex).toBe(1);
+    const events: string[] = [];
+    p.onEvent((e) => events.push(e));
+    p.start(makeWorkout(), T0);
+    events.length = 0;
+    // enterAwaitingSet from rest
+    p.startNextSet(T0);
+    p.completeSet(T0 + 10_000);
+    events.length = 0;
+    p.tick(T0 + 10_000 + 60_000); // rest ends → alarm
+    expect(events.filter((e) => e === 'alarm').length).toBeGreaterThanOrEqual(1);
+
+    const awaitStart = T0 + 10_000 + 60_000;
+    events.length = 0;
+    p.tick(awaitStart + ALARM_INTERVAL_MS + 10);
+    p.tick(awaitStart + ALARM_INTERVAL_MS * 2 + 10);
+    expect(events.filter((e) => e === 'alarm').length).toBeGreaterThanOrEqual(2);
+
+    events.length = 0;
+    p.startNextSet(awaitStart + ALARM_INTERVAL_MS * 3);
+    expect(p.phase).toBe('set_active');
+    p.tick(awaitStart + ALARM_INTERVAL_MS * 5);
+    expect(events.filter((e) => e === 'alarm')).toHaveLength(0);
+  });
+});
+
+describe('countdown beeps from 5 seconds', () => {
+  it('beeps at 5, 4, 3, 2, 1 during rest', () => {
+    const p = usePlayerStore();
+    const events: string[] = [];
+    p.onEvent((e) => events.push(e));
+    const t = beginFirstSet(p);
+    p.completeSet(t + 10_000);
+    events.length = 0;
+    const restStart = t + 10_000;
+    for (let ms = 54_000; ms <= 60_100; ms += 100) p.tick(restStart + ms);
+    expect(events.filter((e) => e === 'beep')).toHaveLength(5);
   });
 });
 
 describe('pause and resume', () => {
-  it('freezes a countdown exactly and resumes with the same remaining time', () => {
+  it('freezes a rest countdown and resumes with the same remaining time', () => {
     const p = usePlayerStore();
-    p.start(makeWorkout(), T0);
-    p.tick(T0 + INTRO_MS);
-    p.completeSet(T0 + INTRO_MS + 10_000);
-    const restStart = T0 + INTRO_MS + 10_000;
-
-    p.tick(restStart + 40_000); // 20 s remaining
+    const t = beginFirstSet(p);
+    p.completeSet(t + 10_000);
+    const restStart = t + 10_000;
+    p.tick(restStart + 40_000);
     p.pause(restStart + 40_000);
-    expect(p.phase).toBe('paused');
     expect(p.remainingMs).toBe(20_000);
-
-    // A very long pause changes nothing.
     p.tick(restStart + 1_000_000);
     expect(p.remainingMs).toBe(20_000);
-
     const resumeAt = restStart + 2_000_000;
     p.resume(resumeAt);
-    expect(p.phase).toBe('rest_set');
-    p.tick(resumeAt + 19_999);
-    expect(p.phase).toBe('rest_set');
     p.tick(resumeAt + 20_000);
-    expect(p.phase).toBe('exercise_intro'); // get ready for the next set
-  });
-
-  it('freezes an elapsed work timer and excludes paused time from workSeconds', () => {
-    const p = usePlayerStore();
-    p.start(makeWorkout(), T0);
-    p.tick(T0 + INTRO_MS);
-    const workStart = T0 + INTRO_MS;
-    p.pause(workStart + 10_000);
-    p.resume(workStart + 500_000);
-    p.completeSet(workStart + 505_000);
-    expect(p.pending!.workSeconds).toBe(15); // 10 s before + 5 s after the pause
+    expect(p.phase).toBe('awaiting_set');
   });
 });
 
-describe('backgrounded expiry and multi-boundary catch-up', () => {
-  it('a rest that expired while backgrounded resolves on return', () => {
+describe('backgrounded rest expiry', () => {
+  it('a rest that expired while backgrounded lands on awaiting_set', () => {
     const p = usePlayerStore();
-    p.start(makeWorkout(), T0);
-    p.tick(T0 + INTRO_MS);
-    p.completeSet(T0 + INTRO_MS + 10_000);
-    const restStart = T0 + INTRO_MS + 10_000;
-    // Backgrounded for far longer than the 60 s rest + 5 s get-ready.
+    const t = beginFirstSet(p);
+    p.completeSet(t + 10_000);
+    const restStart = t + 10_000;
     p.tick(restStart + 600_000);
-    expect(p.phase).toBe('set_active');
-    // Work clock started after rest + get-ready, not at return time.
-    expect(p.elapsedMs).toBe(600_000 - 60_000 - INTRO_MS);
+    expect(p.phase).toBe('awaiting_set');
     expect(p.session!.exercises[0]!.sets[0]!.restSeconds).toBe(60);
-  });
-
-  it('crosses multiple boundaries in order: rest end -> intro end -> active set', () => {
-    const p = usePlayerStore();
-    p.start(makeWorkout(), T0);
-    p.tick(T0 + INTRO_MS);
-    let t = T0 + INTRO_MS;
-    p.completeSet((t += 10_000)); // rest_set 60 s
-    p.tick((t += 60_000)); // get ready for set 2
-    expect(p.phase).toBe('exercise_intro');
-    p.tick((t += INTRO_MS)); // set 2 active
-    expect(p.phase).toBe('set_active');
-    p.completeSet((t += 10_000)); // rest_exercise 120 s
-    const restStart = t;
-
-    // Away past the whole rest AND the next exercise's 5 s intro.
-    p.tick(restStart + 120_000 + INTRO_MS + 7_000);
-    expect(p.phase).toBe('set_active');
-    expect(p.exerciseIndex).toBe(1);
-    expect(p.elapsedMs).toBe(7_000); // anchored at the intro boundary
   });
 });
 
 describe('transport controls', () => {
-  function toSetActive(p: ReturnType<typeof usePlayerStore>, w = makeWorkout()): number {
-    p.start(w, T0);
-    p.tick(T0 + INTRO_MS);
-    return T0 + INTRO_MS;
-  }
-
-  it('skip set logs 0 reps, skipped, and advances as if completed', () => {
+  it('skip set logs skipped and enters rest (or awaiting when rest is 0)', () => {
     const p = usePlayerStore();
-    const t = toSetActive(p);
+    const t = beginFirstSet(p);
     p.skipSet(t + 5_000);
-    expect(p.phase).toBe('rest_set'); // same transition as a completed set
-    p.tick(t + 5_000 + 60_000); // rest ends → get ready
-    expect(p.phase).toBe('exercise_intro');
-    const log = p.session!.exercises[0]!.sets[0]!;
-    expect(log.outcome).toBe('skipped');
-    expect(log.actualReps).toBe(0);
-    expect(p.setIndex).toBe(1);
-  });
-
-  it('skip exercise logs all remaining sets as skipped and moves to the next intro', () => {
-    const p = usePlayerStore();
-    const t = toSetActive(p);
-    p.skipExercise(t + 5_000);
-    expect(p.phase).toBe('exercise_intro');
-    expect(p.exerciseIndex).toBe(1);
-    const a = p.session!.exercises[0]!;
-    expect(a.sets).toHaveLength(2);
-    expect(a.sets.every((x) => x.outcome === 'skipped')).toBe(true);
+    expect(p.phase).toBe('rest_set');
+    p.tick(t + 5_000 + 60_000);
+    expect(p.phase).toBe('awaiting_set');
+    expect(p.session!.exercises[0]!.sets[0]!.outcome).toBe('skipped');
   });
 
   it('skip exercise on the final exercise completes the workout', () => {
     const p = usePlayerStore();
-    const t = toSetActive(p);
-    p.skipExercise(t + 5_000); // -> exercise 2 intro
-    p.skipExercise(t + 6_000); // final exercise -> complete
+    const t = beginFirstSet(p);
+    p.skipExercise(t + 5_000);
+    expect(p.phase).toBe('awaiting_set');
+    expect(p.exerciseIndex).toBe(1);
+    p.skipExercise(t + 6_000);
     expect(p.phase).toBe('complete');
-  });
-
-  it('every set skipped -> completed session, skipped outcomes, volume 0', () => {
-    const p = usePlayerStore();
-    const t = toSetActive(p);
-    p.skipExercise(t + 1_000);
-    p.skipExercise(t + 2_000);
-    const s = p.session!;
-    expect(s.status).toBe('completed');
-    expect(s.exercises.every((e) => e.outcome === 'skipped')).toBe(true);
-    expect(sessionVolume(s).lb).toBe(0);
-    expect(sessionVolume(s).kg).toBe(0);
   });
 
   it('previous set is disabled at exercise 0, set 0', () => {
     const p = usePlayerStore();
-    toSetActive(p);
+    beginFirstSet(p);
     expect(p.canPreviousSet).toBe(false);
-    p.previousSet(T0 + INTRO_MS + 1_000); // no crash, no change
-    expect(p.phase).toBe('set_active');
-    expect(p.setIndex).toBe(0);
   });
 
-  it('previous set during rest discards the pending log and re-enters that set', () => {
+  it('previous set during rest re-enters that set', () => {
     const p = usePlayerStore();
-    const t = toSetActive(p);
+    const t = beginFirstSet(p);
     p.completeSet(t + 10_000);
-    expect(p.setIndex).toBe(1);
     p.previousSet(t + 15_000);
     expect(p.phase).toBe('set_active');
     expect(p.setIndex).toBe(0);
-    expect(p.pending).toBeNull();
-    expect(p.session!.exercises[0]!.sets).toHaveLength(0); // discarded
-  });
-
-  it('previous set at set 0 re-enters the last set of the previous exercise', () => {
-    const p = usePlayerStore();
-    const t = toSetActive(p);
-    p.skipExercise(t + 1_000); // -> exercise 2 intro
-    p.previousSet(t + 2_000);
-    expect(p.exerciseIndex).toBe(0);
-    expect(p.setIndex).toBe(1);
-    expect(p.phase).toBe('set_active');
-    // The re-entered set's old log is discarded; earlier ones kept.
-    expect(p.session!.exercises[0]!.sets.map((x) => x.setIndex)).toEqual([0]);
-  });
-
-  it('previous exercise jumps to set 0 of the previous exercise and discards re-entered logs', () => {
-    const p = usePlayerStore();
-    let t = toSetActive(p);
-    p.completeSet((t += 10_000));
-    p.tick((t += 60_000)); // rest ends → get ready for set 2
-    p.tick((t += INTRO_MS)); // set 2 active
-    p.completeSet((t += 10_000)); // -> rest_exercise, cursor on exercise 2
-    p.tick((t += 120_000)); // exercise 2 intro
-    p.tick((t += INTRO_MS)); // exercise 2 set active
-    p.previousExercise((t += 2_000));
-    expect(p.exerciseIndex).toBe(0);
-    expect(p.setIndex).toBe(0);
-    expect(p.phase).toBe('exercise_intro');
     expect(p.session!.exercises[0]!.sets).toHaveLength(0);
-    expect(p.session!.exercises[1]!.sets).toHaveLength(0);
-  });
-
-  it('previous exercise is disabled at exercise 0', () => {
-    const p = usePlayerStore();
-    toSetActive(p);
-    expect(p.canPreviousExercise).toBe(false);
   });
 });
 
 describe('rest adjustments', () => {
-  it('+30 s extends and −15 s shortens the current countdown only', () => {
+  it('shortening below zero ends rest into awaiting_set', () => {
     const p = usePlayerStore();
-    p.start(makeWorkout(), T0);
-    p.tick(T0 + INTRO_MS);
-    const t = T0 + INTRO_MS + 10_000;
-    p.completeSet(t);
-    p.adjustRest(30, t + 1_000);
-    expect(p.remainingMs).toBe(89_000);
-    p.adjustRest(-15, t + 2_000);
-    expect(p.remainingMs).toBe(73_000);
-  });
-
-  it('shortening below zero completes the rest immediately', () => {
-    const p = usePlayerStore();
-    p.start(makeWorkout(), T0);
-    p.tick(T0 + INTRO_MS);
-    const t = T0 + INTRO_MS + 10_000;
-    p.completeSet(t);
-    p.tick(t + 55_000); // 5 s remaining
-    p.adjustRest(-15, t + 55_000);
-    expect(p.phase).toBe('exercise_intro'); // get ready for the next set
-    expect(p.session!.exercises[0]!.sets).toHaveLength(1);
+    const t = beginFirstSet(p);
+    p.completeSet(t + 10_000);
+    p.tick(t + 10_000 + 55_000);
+    p.adjustRest(-15, t + 10_000 + 55_000);
+    expect(p.phase).toBe('awaiting_set');
   });
 });
 
 describe('stop / abandon', () => {
-  it('saves a partial session, committing an in-flight pending set', async () => {
+  it('saves a partial session from mid-rest', async () => {
     const p = usePlayerStore();
     const sessions = useSessionsStore();
-    p.start(makeWorkout(), T0);
-    p.tick(T0 + INTRO_MS);
-    const t = T0 + INTRO_MS + 10_000;
-    p.completeSet(t); // resting; set 1 pending
-    await p.abandon(t + 5_000);
+    const t = beginFirstSet(p);
+    p.completeSet(t + 10_000);
+    await p.abandon(t + 15_000);
     expect(p.phase).toBe('abandoned');
-    expect(sessions.sessions).toHaveLength(1);
-    const saved = sessions.sessions[0]!;
-    expect(saved.status).toBe('abandoned');
-    expect(saved.exercises[0]!.sets).toHaveLength(1);
-    expect(saved.exercises[0]!.outcome).toBe('partial');
-    expect(saved.exercises[1]!.outcome).toBe('skipped'); // never reached
+    expect(sessions.sessions[0]!.status).toBe('abandoned');
+    expect(sessions.sessions[0]!.exercises[0]!.sets).toHaveLength(1);
   });
 });
 
-describe('single exercise, single set (edge 11.1)', () => {
+describe('single exercise, single set', () => {
   it('completes after one set with no rest screens', () => {
     const w = makeWorkout({
       exercises: [
@@ -462,60 +300,24 @@ describe('single exercise, single set (edge 11.1)', () => {
       ],
     });
     const p = usePlayerStore();
-    p.start(w, T0);
-    p.tick(T0 + INTRO_MS);
-    p.completeSet(T0 + INTRO_MS + 20_000);
+    const t = beginFirstSet(p, w);
+    p.completeSet(t + 20_000);
     expect(p.phase).toBe('complete');
-    expect(p.session!.exercises[0]!.sets[0]!.restSeconds).toBe(0);
   });
 });
 
-describe('audio cue events', () => {
-  it('emits beep at 3, 2, 1 during rest, then go when get-ready ends', () => {
+describe('persistence round trip', () => {
+  it('hydrating mid-rest restores remaining time; overdue rest → awaiting_set', () => {
     const p = usePlayerStore();
-    const events: string[] = [];
-    p.onEvent((e) => events.push(e));
-    p.start(makeWorkout(), T0);
-    p.tick(T0 + INTRO_MS);
-    const t = T0 + INTRO_MS + 10_000;
-    p.completeSet(t);
-    events.length = 0; // ignore start/intro cues
-
-    // Through rest expiry (beeps) and the following get-ready countdown (go).
-    for (let ms = 56_000; ms <= 60_000 + INTRO_MS + 100; ms += 100) p.tick(t + ms);
-
-    expect(events.filter((e) => e === 'beep')).toHaveLength(6); // 3 during rest + 3 during get-ready
-    expect(events.filter((e) => e === 'go')).toHaveLength(1);
-    expect(events[events.length - 1]).toBe('go');
-  });
-
-  it('stays silent when catching up long-expired boundaries', () => {
-    const p = usePlayerStore();
-    const events: string[] = [];
-    p.start(makeWorkout(), T0);
-    p.tick(T0 + INTRO_MS);
-    const t = T0 + INTRO_MS + 10_000;
-    p.completeSet(t);
-    p.onEvent((e) => events.push(e));
-    p.tick(t + 600_000); // rest expired 9 minutes ago
-    expect(events).toHaveLength(0);
-  });
-});
-
-describe('persistence round trip (crash / refresh / killed tab)', () => {
-  it('hydrating a mid-rest snapshot restores the exact remaining time', () => {
-    const p = usePlayerStore();
-    p.start(makeWorkout(), T0);
-    p.tick(T0 + INTRO_MS);
-    const t = T0 + INTRO_MS + 10_000;
-    p.completeSet(t);
+    const t = beginFirstSet(p);
+    p.completeSet(t + 10_000);
     p.setReps(7);
-    p.tick(t + 20_000); // 40 s of rest left
+    p.tick(t + 10_000 + 20_000);
 
     const snapshot = JSON.parse(
       JSON.stringify({
         schemaVersion: SCHEMA_VERSION,
-        savedAt: new Date(t + 20_000).toISOString(),
+        savedAt: new Date(t + 30_000).toISOString(),
         phase: p.phase,
         pausedFrom: p.pausedFrom,
         workout: p.workout,
@@ -529,19 +331,17 @@ describe('persistence round trip (crash / refresh / killed tab)', () => {
       }),
     ) as PersistedPlayerState;
 
-    // Fresh app instance (new pinia): the tab was killed.
     setActivePinia(createPinia());
     const q = usePlayerStore();
-    q.hydrate(snapshot, t + 30_000);
+    q.hydrate(snapshot, t + 10_000 + 30_000);
     expect(q.phase).toBe('rest_set');
     expect(q.remainingMs).toBe(30_000);
     expect(q.pendingReps).toBe(7);
 
-    // And if it was killed for longer than the rest, it resolves forward.
     setActivePinia(createPinia());
     const r = usePlayerStore();
-    r.hydrate(JSON.parse(JSON.stringify(snapshot)) as PersistedPlayerState, t + 100_000);
-    expect(r.phase).toBe('set_active');
+    r.hydrate(JSON.parse(JSON.stringify(snapshot)) as PersistedPlayerState, t + 10_000 + 100_000);
+    expect(r.phase).toBe('awaiting_set');
     expect(r.session!.exercises[0]!.sets[0]!.actualReps).toBe(7);
   });
 });

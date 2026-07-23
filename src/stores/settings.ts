@@ -9,7 +9,7 @@ export const DEFAULT_SETTINGS: Settings = {
   soundEnabled: true,
   vibrationEnabled: true,
   keepScreenAwake: true,
-  countdownBeepsAt: [3, 2, 1],
+  countdownBeepsAt: [5, 4, 3, 2, 1],
   theme: 'dark',
 };
 

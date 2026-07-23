@@ -63,9 +63,15 @@ export function cueCountdownBeep(): void {
   tone({ freq: 1320, duration: 0.09, volume: 0.45, type: 'square' });
 }
 
-/** Longer, lower "go" tone at zero. */
+/** Longer, lower "go" tone at zero / start-set. */
 export function cueGo(): void {
   tone({ freq: 620, duration: 0.35, volume: 0.6, type: 'square' });
+}
+
+/** Repeating alarm while waiting for the user to start the next set. */
+export function cueAlarm(): void {
+  tone({ freq: 880, duration: 0.12, volume: 0.55, type: 'square' });
+  tone({ freq: 660, duration: 0.18, at: 0.14, volume: 0.6, type: 'square' });
 }
 
 /** Distinct two-tone cue when a new exercise begins. */
