@@ -109,19 +109,24 @@ describe('simple loop', () => {
     expect(q.phase).toBe('set_active');
   });
 
-  it('skip set never rests and never alarms', () => {
+  it('skip set never rests and never alarms; lands paused at 0', () => {
     const p = usePlayerStore();
     const events: string[] = [];
     p.onEvent((e) => events.push(e));
     const t = beginFirstSet(p);
     p.skipSet(t + 5_000);
-    expect(p.phase).toBe('set_active');
+    expect(p.phase).toBe('paused');
+    expect(p.pausedFrom).toBe('set_active');
+    expect(p.elapsedMs).toBe(0);
     expect(p.setIndex).toBe(1);
     expect(p.session!.exercises[0]!.sets[0]!.outcome).toBe('skipped');
     expect(events.filter((e) => e === 'alarm')).toHaveLength(0);
+    p.toggleTimer(t + 6_000);
+    expect(p.phase).toBe('set_active');
+    expect(p.elapsedMs).toBe(0);
   });
 
-  it('skip from rest leaves rest and starts the next work set with no alarm', () => {
+  it('skip from rest leaves rest and lands next work set paused at 0', () => {
     const p = usePlayerStore();
     const events: string[] = [];
     p.onEvent((e) => events.push(e));
@@ -130,22 +135,41 @@ describe('simple loop', () => {
     expect(p.phase).toBe('rest_set');
     events.length = 0;
     p.skipSet(t + 15_000); // skip upcoming set 2 while resting
-    expect(p.phase).toBe('set_active'); // jumped to next exercise set 0 (only 2 sets on ex1)
+    expect(p.phase).toBe('paused');
+    expect(p.pausedFrom).toBe('set_active');
+    expect(p.elapsedMs).toBe(0);
     expect(p.exerciseIndex).toBe(1);
     expect(p.setIndex).toBe(0);
     expect(events.filter((e) => e === 'alarm')).toHaveLength(0);
   });
 
-  it('skip exercise jumps to next exercise work with no rest or alarm', () => {
+  it('skip exercise jumps to next exercise paused at 0 with no rest or alarm', () => {
     const p = usePlayerStore();
     const events: string[] = [];
     p.onEvent((e) => events.push(e));
     const t = beginFirstSet(p);
     p.skipExercise(t + 1_000);
-    expect(p.phase).toBe('set_active');
+    expect(p.phase).toBe('paused');
+    expect(p.pausedFrom).toBe('set_active');
+    expect(p.elapsedMs).toBe(0);
     expect(p.exerciseIndex).toBe(1);
     expect(p.setIndex).toBe(0);
     expect(events.filter((e) => e === 'alarm')).toHaveLength(0);
+  });
+
+  it('timer toggle pauses and resumes work', () => {
+    const p = usePlayerStore();
+    const t = beginFirstSet(p);
+    p.tick(t + 4_000);
+    expect(p.elapsedMs).toBe(4_000);
+    p.toggleTimer(t + 4_000);
+    expect(p.phase).toBe('paused');
+    expect(p.elapsedMs).toBe(4_000);
+    p.tick(t + 20_000); // wall clock advances while paused
+    expect(p.elapsedMs).toBe(4_000);
+    p.toggleTimer(t + 20_000);
+    expect(p.phase).toBe('set_active');
+    expect(p.elapsedMs).toBe(4_000);
   });
 
   it('full workout end to end', () => {

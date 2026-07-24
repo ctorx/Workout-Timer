@@ -89,7 +89,26 @@ watch(
 
 const phase = computed(() => player.effectivePhase);
 const isPaused = computed(() => player.phase === 'paused');
+/** After skip (or pause at 0): waiting for a tap on the timer to start. */
+const waitingToStart = computed(
+  () =>
+    isPaused.value &&
+    player.pausedFrom === 'set_active' &&
+    player.elapsedMs === 0,
+);
+const timerToggleable = computed(
+  () =>
+    isPaused.value ||
+    phase.value === 'set_active' ||
+    phase.value === 'rest_set' ||
+    phase.value === 'rest_exercise',
+);
 const ex = computed(() => player.currentExercise);
+
+function onTimerClick(): void {
+  if (!timerToggleable.value) return;
+  player.toggleTimer(Date.now());
+}
 
 const phaseColor = computed(() => {
   switch (phase.value) {
@@ -225,7 +244,7 @@ const primaryLabel = computed(() => {
     case 'set_active':
       return 'Set complete';
     case 'paused':
-      return 'Resume';
+      return waitingToStart.value ? 'Start set' : 'Resume';
     case 'complete':
       return 'Save & finish';
     default:
@@ -461,27 +480,47 @@ const summaryVolume = computed(() =>
           </p>
         </section>
 
-        <!-- The signature timer -->
+        <!-- The signature timer — tap to pause / restart -->
         <section class="relative mt-2 flex flex-1 flex-col items-center justify-center" :class="phaseColor">
-          <ProgressRing :fraction="ringFraction" :size="300" :thickness="11">
-            <div class="text-center">
-              <p class="text-xs font-bold uppercase tracking-[0.25em] opacity-80">
-                {{ isPaused ? 'Paused' : phaseLabel }}
-              </p>
-              <p
-                class="tnum font-bold leading-none tracking-tighter"
-                style="font-size: min(19vh, 21vw, 108px)"
-              >
-                {{ bigTime }}
-              </p>
-              <p
-                v-if="(phase === 'rest_exercise' || phase === 'awaiting_set') && ex"
-                class="mt-1 max-w-[200px] truncate text-xs text-muted"
-              >
-                {{ phase === 'awaiting_set' ? 'Stop alarm to begin' : `Next: ${ex.name}` }}
-              </p>
-            </div>
-          </ProgressRing>
+          <button
+            type="button"
+            class="rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:pointer-events-none"
+            :disabled="!timerToggleable"
+            :aria-label="
+              waitingToStart
+                ? 'Start set timer'
+                : isPaused
+                  ? 'Resume timer'
+                  : 'Pause timer'
+            "
+            @click="onTimerClick"
+          >
+            <ProgressRing :fraction="ringFraction" :size="300" :thickness="11">
+              <div class="text-center">
+                <p class="text-xs font-bold uppercase tracking-[0.25em] opacity-80">
+                  {{ waitingToStart ? 'Ready' : isPaused ? 'Paused' : phaseLabel }}
+                </p>
+                <p
+                  class="tnum font-bold leading-none tracking-tighter"
+                  style="font-size: min(19vh, 21vw, 108px)"
+                >
+                  {{ bigTime }}
+                </p>
+                <p
+                  v-if="waitingToStart"
+                  class="mt-1 text-xs text-muted"
+                >
+                  Tap to start
+                </p>
+                <p
+                  v-else-if="(phase === 'rest_exercise' || phase === 'awaiting_set') && ex"
+                  class="mt-1 max-w-[200px] truncate text-xs text-muted"
+                >
+                  {{ phase === 'awaiting_set' ? 'Stop alarm to begin' : `Next: ${ex.name}` }}
+                </p>
+              </div>
+            </ProgressRing>
+          </button>
 
           <!-- Rest-time rep stepper: entry never blocks the countdown -->
           <div v-if="player.isRestPhase && player.pending && !isPaused" class="mt-2 w-full">

@@ -8,7 +8,8 @@
  *
  * Rest never auto-starts the next set. Alarm keeps firing until the user
  * taps Stop alarm. Skip set / skip exercise never enter rest and never
- * ring the alarm — they jump straight to the next set or exercise.
+ * ring the alarm — they jump to the next set paused at 0:00;
+ * the user taps the timer to start.
  * Time is wall-clock based (no setInterval accumulation).
  */
 import { computed, ref } from 'vue';
@@ -242,6 +243,12 @@ export const usePlayerStore = defineStore('player', () => {
     startElapsed(now);
     lastAlarmPulse = -1;
     if (cue) emit('go');
+  }
+
+  /** Next set ready at 0:00 — paused until the user taps the timer. */
+  function enterSetReady(now: number): void {
+    enterSetActive(now, false);
+    pause(now);
   }
 
   /** Writes the pending set's log with the currently displayed rep count. */
@@ -488,6 +495,17 @@ export const usePlayerStore = defineStore('player', () => {
     persistNow();
   }
 
+  /** Tap the timer: pause while running, restart while paused. */
+  function toggleTimer(now = Date.now()): void {
+    if (phase.value === 'paused') {
+      resume(now);
+      return;
+    }
+    if (phase.value === 'set_active' || REST_PHASES.includes(phase.value)) {
+      pause(now);
+    }
+  }
+
   function writeSkippedSet(exIdx: number, setIdx: number, now: number): void {
     const s = session.value;
     const ex = workout.value?.exercises[exIdx];
@@ -513,8 +531,8 @@ export const usePlayerStore = defineStore('player', () => {
   }
 
   /**
-   * After a skip: never rest, never alarm — jump straight into the next
-   * set/exercise work timer (or complete).
+   * After a skip: never rest, never alarm — land on the next set paused
+   * at 0:00 (or complete). User taps the timer to start.
    */
   function advanceAfterSkip(now: number): void {
     const w = workout.value;
@@ -525,14 +543,14 @@ export const usePlayerStore = defineStore('player', () => {
 
     if (setIndex.value < ex.sets - 1) {
       setIndex.value += 1;
-      enterSetActive(now, false);
+      enterSetReady(now);
       persistNow();
       return;
     }
     if (exerciseIndex.value < w.exercises.length - 1) {
       exerciseIndex.value += 1;
       setIndex.value = 0;
-      enterSetActive(now, false);
+      enterSetReady(now);
       emit('new_exercise');
       persistNow();
       return;
@@ -542,7 +560,7 @@ export const usePlayerStore = defineStore('player', () => {
 
   /**
    * ▶ Skip the current set (or the set you're about to do during rest/alarm).
-   * Never enters rest and never rings the alarm.
+   * Never enters rest and never rings the alarm. Lands paused at 0:00.
    */
   function skipSet(now = Date.now()): void {
     resumeIfPaused(now);
@@ -558,7 +576,7 @@ export const usePlayerStore = defineStore('player', () => {
 
   /**
    * ⏭ Skip the rest of this exercise. Lands on the next exercise's first
-   * set in work mode — no rest, no alarm.
+   * set paused at 0:00 — no rest, no alarm.
    */
   function skipExercise(now = Date.now()): void {
     resumeIfPaused(now);
@@ -579,7 +597,7 @@ export const usePlayerStore = defineStore('player', () => {
     }
     exerciseIndex.value += 1;
     setIndex.value = 0;
-    enterSetActive(now, false);
+    enterSetReady(now);
     emit('new_exercise');
     persistNow();
   }
@@ -803,6 +821,7 @@ export const usePlayerStore = defineStore('player', () => {
     adjustRest,
     pause,
     resume,
+    toggleTimer,
     skipSet,
     skipExercise,
     previousSet,
