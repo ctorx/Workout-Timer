@@ -507,16 +507,22 @@ const summaryVolume = computed(() =>
                   {{ bigTime }}
                 </p>
                 <p
-                  v-if="waitingToStart"
+                  v-if="timerToggleable"
                   class="mt-1 text-xs text-muted"
                 >
-                  Tap to start
+                  {{ isPaused ? 'click to continue' : 'click to pause' }}
                 </p>
                 <p
-                  v-else-if="(phase === 'rest_exercise' || phase === 'awaiting_set') && ex"
+                  v-else-if="phase === 'awaiting_set'"
+                  class="mt-1 text-xs text-muted"
+                >
+                  Stop alarm to begin
+                </p>
+                <p
+                  v-else-if="phase === 'rest_exercise' && ex"
                   class="mt-1 max-w-[200px] truncate text-xs text-muted"
                 >
-                  {{ phase === 'awaiting_set' ? 'Stop alarm to begin' : `Next: ${ex.name}` }}
+                  Next: {{ ex.name }}
                 </p>
               </div>
             </ProgressRing>
