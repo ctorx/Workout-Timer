@@ -6,7 +6,7 @@ const route = useRoute();
 </script>
 
 <template>
-  <div class="flex min-h-dvh flex-col bg-bg text-text">
+  <div class="flex min-h-dvh flex-col bg-bg text-text" :class="route.meta.tab ? 'md:pl-24' : ''">
     <router-view v-slot="{ Component }">
       <transition name="screen" mode="out-in">
         <component :is="Component" class="flex-1" />

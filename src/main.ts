@@ -7,8 +7,7 @@ import { initUpdates } from '@/lib/updates';
 import { useSettingsStore } from '@/stores/settings';
 import { useWorkoutsStore } from '@/stores/workouts';
 import { useSessionsStore } from '@/stores/sessions';
-import { usePlayerStore } from '@/stores/player';
-import { resumeAudioIfNeeded } from '@/lib/audio';
+import { startPlayerRuntime } from '@/lib/playerRuntime';
 import '@/style.css';
 
 initUpdates();
@@ -32,18 +31,8 @@ async function boot(): Promise<void> {
   app.use(router);
   app.mount('#app');
 
-  // Background tabs throttle timers and iOS suspends audio: reconcile the
-  // player clock and the AudioContext whenever we come back.
-  const player = usePlayerStore();
-  const reconcile = () => {
-    resumeAudioIfNeeded();
-    player.tick(Date.now());
-  };
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') reconcile();
-  });
-  window.addEventListener('focus', reconcile);
-  window.addEventListener('pageshow', reconcile);
+  // Clock, scheduled sound, vibration and wake lock for the whole app.
+  startPlayerRuntime();
 }
 
 void boot();

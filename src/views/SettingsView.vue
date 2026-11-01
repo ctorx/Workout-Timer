@@ -24,6 +24,12 @@ import { uuid } from '@/lib/id';
 import { APP_VERSION, shortVersion } from '@/lib/version';
 import { checkForAppUpdate } from '@/lib/updates';
 import ConfirmDialog from '@/components/ConfirmDialog.vue';
+import { playCue, unlockAudio } from '@/lib/audio';
+
+function testSound(): void {
+  unlockAudio();
+  playCue('alarm');
+}
 
 const settingsStore = useSettingsStore();
 const workouts = useWorkoutsStore();
@@ -234,7 +240,7 @@ async function eraseAll(): Promise<void> {
 </script>
 
 <template>
-  <main class="safe-top mx-auto w-full max-w-xl px-4 pb-8">
+  <main class="safe-top mx-auto w-full max-w-2xl px-4 pb-8">
     <header class="py-4">
       <h1 class="text-2xl font-bold tracking-tight">Settings</h1>
     </header>
@@ -364,6 +370,29 @@ async function eraseAll(): Promise<void> {
           @change="settingsStore.update({ keepScreenAwake: ($event.target as HTMLInputElement).checked })"
         />
       </label>
+      <label class="flex min-h-[44px] items-center justify-between gap-3">
+        <span>
+          Keep alerts working in the background
+          <span class="block text-xs text-faint">
+            Plays an inaudible tone during workouts so the browser keeps the timer and alarm
+            running when you switch apps or windows. Works on Android and desktop. iPhones still
+            pause web apps when the screen locks.
+          </span>
+        </span>
+        <input
+          type="checkbox"
+          class="h-6 w-6 shrink-0 accent-[var(--c-accent)]"
+          :checked="s.backgroundAudio"
+          @change="settingsStore.update({ backgroundAudio: ($event.target as HTMLInputElement).checked })"
+        />
+      </label>
+      <button
+        type="button"
+        class="mt-1 min-h-[44px] w-full rounded-xl bg-surface-2 px-4 text-sm font-medium hover:bg-border"
+        @click="testSound"
+      >
+        Test the alarm sound
+      </button>
 
       <label class="mt-2 block text-xs text-faint" for="beeps">
         Countdown beeps at (seconds before zero)
@@ -377,6 +406,40 @@ async function eraseAll(): Promise<void> {
         @blur="commitBeeps"
         @keydown.enter="($event.target as HTMLInputElement).blur()"
       />
+    </section>
+
+    <!-- Weight steps -->
+    <section class="mt-4 rounded-2xl border border-border bg-surface-1 p-4">
+      <h2 class="text-xs font-semibold uppercase tracking-widest text-faint">Weight steps</h2>
+      <p class="mt-1 text-xs text-faint">
+        How much the + and − buttons change the weight while you log a set.
+      </p>
+      <div class="mt-3 grid grid-cols-2 gap-3">
+        <label class="block text-sm">
+          <span class="text-muted">Pounds</span>
+          <input
+            type="number"
+            inputmode="decimal"
+            min="0.5"
+            step="0.5"
+            class="tnum mt-1 w-full rounded-xl border border-border bg-surface-2 px-3 py-2.5"
+            :value="s.weightStepLb"
+            @change="settingsStore.update({ weightStepLb: Math.max(0.5, Number.parseFloat(($event.target as HTMLInputElement).value) || 5) })"
+          />
+        </label>
+        <label class="block text-sm">
+          <span class="text-muted">Kilograms</span>
+          <input
+            type="number"
+            inputmode="decimal"
+            min="0.25"
+            step="0.25"
+            class="tnum mt-1 w-full rounded-xl border border-border bg-surface-2 px-3 py-2.5"
+            :value="s.weightStepKg"
+            @change="settingsStore.update({ weightStepKg: Math.max(0.25, Number.parseFloat(($event.target as HTMLInputElement).value) || 2.5) })"
+          />
+        </label>
+      </div>
     </section>
 
     <!-- About / version -->

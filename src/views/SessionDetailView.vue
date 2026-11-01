@@ -31,7 +31,7 @@ async function deleteSession(): Promise<void> {
 </script>
 
 <template>
-  <main class="safe-top mx-auto w-full max-w-xl px-4 pb-6">
+  <main class="safe-top mx-auto w-full max-w-3xl px-4 pb-6">
     <header class="flex items-center gap-2 py-4">
       <router-link
         :to="{ name: 'history' }"
@@ -94,7 +94,12 @@ async function deleteSession(): Promise<void> {
         class="mt-3 rounded-2xl border border-border bg-surface-1 p-4"
       >
         <div class="flex items-baseline justify-between">
-          <h3 class="font-semibold">{{ exLog.name }}</h3>
+          <router-link
+            :to="{ name: 'exercise-detail', params: { name: exLog.name } }"
+            class="font-semibold hover:text-accent"
+          >
+            {{ exLog.name }} <span class="text-xs font-normal text-faint">history →</span>
+          </router-link>
           <span
             class="text-xs font-medium"
             :class="{
@@ -114,6 +119,7 @@ async function deleteSession(): Promise<void> {
               <th class="py-1 font-medium">Set</th>
               <th class="py-1 font-medium">Reps</th>
               <th class="py-1 font-medium">Weight</th>
+              <th class="py-1 font-medium" title="Reps left in the tank">In tank</th>
               <th class="py-1 text-right font-medium">Work</th>
               <th class="py-1 text-right font-medium">Rest</th>
             </tr>
@@ -132,6 +138,7 @@ async function deleteSession(): Promise<void> {
               <td class="py-1.5">
                 {{ set.weight > 0 ? `${set.weight} ${set.unit}` : 'BW' }}
               </td>
+              <td class="py-1.5 text-muted">{{ set.rir ?? '–' }}</td>
               <td class="py-1.5 text-right text-muted">{{ set.workSeconds }}s</td>
               <td class="py-1.5 text-right text-muted">{{ set.restSeconds }}s</td>
             </tr>

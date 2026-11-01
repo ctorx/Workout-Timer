@@ -9,6 +9,17 @@ import { clearPlayerState, loadPlayerState } from '@/lib/persistence';
 import { unlockAudio } from '@/lib/audio';
 import { estimateWorkoutSeconds, formatDuration, formatShortDate, DAY_NAMES } from '@/lib/time';
 import ConfirmDialog from '@/components/ConfirmDialog.vue';
+import {
+  exerciseHistory,
+  formatLoad,
+  formatPerformance,
+  formatRepTarget,
+  isPlateau,
+  lastPerformance,
+  progressionAdvice,
+  weightStepFor,
+} from '@/lib/stats';
+import { useSettingsStore } from '@/stores/settings';
 
 const router = useRouter();
 const workouts = useWorkoutsStore();
@@ -27,6 +38,8 @@ onMounted(async () => {
 function resumeWorkout(): void {
   const state = resumable.value;
   if (!state) return;
+  // This tap re-enables sound, which the browser turns off on a refresh.
+  unlockAudio();
   player.hydrate(state, Date.now());
   void router.push({ name: 'play', params: { workoutId: state.workout.id } });
 }
@@ -84,11 +97,29 @@ function lastCompletedLabel(w: Workout): string | null {
 /* ---------------------------- start sheet ---------------------------- */
 
 const sheetWorkout = ref<Workout | null>(null);
+const settingsStore = useSettingsStore();
 const confirmDiscardStart = ref(false);
 
 function openSheet(w: Workout): void {
   sheetWorkout.value = w;
 }
+
+/** Last time's numbers per exercise, and whether it is time to add weight. */
+const sheetRows = computed(() => {
+  const w = sheetWorkout.value;
+  if (!w) return [];
+  return w.exercises.map((ex) => {
+    const last = lastPerformance(sessions.sessions, ex.id, ex.name);
+    const advice = last ? progressionAdvice(last.sets, ex, weightStepFor(ex, settingsStore.settings)) : null;
+    return {
+      ex,
+      last: last ? formatPerformance(last.sets) : null,
+      // Already raised in the plan? Then the suggestion has been taken.
+      progress: advice?.kind === 'increase' && ex.weight < advice.to ? advice.to : null,
+      stalled: isPlateau(exerciseHistory(sessions.sessions, ex.name)),
+    };
+  });
+});
 
 function requestStart(): void {
   if (!sheetWorkout.value || sheetWorkout.value.exercises.length === 0) return;
@@ -116,7 +147,7 @@ const reorderMode = ref(false);
 </script>
 
 <template>
-  <main class="safe-top mx-auto w-full max-w-xl px-4 pb-6">
+  <main class="safe-top mx-auto w-full max-w-3xl px-4 pb-6">
     <header class="flex items-center justify-between py-4">
       <h1 class="text-2xl font-bold tracking-tight">Workouts</h1>
       <div class="flex gap-2">
@@ -188,10 +219,10 @@ const reorderMode = ref(false);
         </span>
       </button>
 
-      <div v-if="isExpanded(group)" class="flex flex-col gap-2">
+      <div v-if="isExpanded(group)" class="grid gap-2 sm:grid-cols-2">
         <p
           v-if="group.isToday && group.workouts.length === 0"
-          class="rounded-2xl border border-dashed border-border px-4 py-5 text-sm text-muted"
+          class="rounded-2xl border border-dashed border-border px-4 py-5 text-sm text-muted sm:col-span-2"
         >
           Nothing scheduled today. Pick any workout below, or assign one to
           {{ DAY_NAMES[todayDow] }} in its editor.
@@ -203,7 +234,7 @@ const reorderMode = ref(false);
         >
           <button
             type="button"
-            class="min-h-[64px] flex-1 rounded-2xl border bg-surface-1 px-4 py-3 text-left"
+            class="min-h-[64px] flex-1 rounded-2xl border bg-surface-1 px-4 py-3 text-left transition hover:border-muted"
             :class="w.optional ? 'border-border/50' : 'border-border'"
             @click="openSheet(w)"
           >
@@ -248,14 +279,14 @@ const reorderMode = ref(false);
     <Teleport to="body">
       <div
         v-if="sheetWorkout"
-        class="fixed inset-0 z-40 flex items-end justify-center bg-black/60"
+        class="fixed inset-0 z-40 flex items-end justify-center bg-black/60 sm:items-center sm:p-6"
         role="dialog"
         aria-modal="true"
         :aria-label="`Start ${sheetWorkout.name}`"
         @click.self="sheetWorkout = null"
         @keydown.escape="sheetWorkout = null"
       >
-        <div class="safe-bottom w-full max-w-xl rounded-t-3xl border-t border-border bg-surface-1 p-5">
+        <div class="safe-bottom w-full max-w-xl rounded-t-3xl border-t border-border bg-surface-1 p-5 sm:rounded-3xl sm:border">
           <div class="mx-auto mb-4 h-1 w-10 rounded-full bg-border" aria-hidden="true"></div>
           <div class="flex items-start justify-between gap-3">
             <div>
@@ -273,13 +304,22 @@ const reorderMode = ref(false);
             </router-link>
           </div>
 
-          <ol class="mt-4 max-h-48 space-y-1 overflow-y-auto text-sm text-muted">
-            <li v-for="ex in sheetWorkout.exercises" :key="ex.id" class="flex justify-between">
-              <span>{{ ex.name }}</span>
-              <span class="tnum">
-                {{ ex.sets }}×{{ ex.targetReps }}
-                <template v-if="ex.weight > 0">· {{ ex.weight }} {{ ex.unit }}</template>
-              </span>
+          <ol class="mt-4 max-h-[45dvh] space-y-1.5 overflow-y-auto text-sm">
+            <li v-for="row in sheetRows" :key="row.ex.id" class="rounded-xl bg-surface-2/60 px-3 py-2">
+              <div class="flex justify-between gap-2">
+                <span class="font-medium">{{ row.ex.name }}</span>
+                <span class="tnum shrink-0 text-muted">
+                  {{ row.ex.sets }}×{{ formatRepTarget(row.ex) }}
+                  <template v-if="row.ex.weight > 0">· {{ formatLoad(row.ex.weight, row.ex) }}</template>
+                </span>
+              </div>
+              <p v-if="row.last || row.progress || row.stalled" class="tnum mt-0.5 text-xs text-muted">
+                <template v-if="row.last">Last: {{ row.last }}</template>
+                <span v-if="row.progress" class="ml-1 font-semibold text-work">
+                  ↑ ready for {{ formatLoad(row.progress, row.ex) }}
+                </span>
+                <span v-if="row.stalled" class="ml-1 font-semibold text-warn">· no gain in 3 sessions</span>
+              </p>
             </li>
           </ol>
 

@@ -26,6 +26,15 @@ export function validateExercise(ex: Exercise): ExerciseErrors {
   }
   if (!isCount(ex.sets) || ex.sets < 1) errors.sets = 'At least 1 set.';
   if (!isCount(ex.targetReps) || ex.targetReps < 1) errors.targetReps = 'At least 1 rep.';
+  else if (ex.repsMax !== undefined && (!isCount(ex.repsMax) || ex.repsMax < ex.targetReps)) {
+    errors.targetReps = 'The top of the rep range must be at least the bottom.';
+  }
+  if (
+    ex.weightStep !== undefined &&
+    (typeof ex.weightStep !== 'number' || !Number.isFinite(ex.weightStep) || ex.weightStep <= 0)
+  ) {
+    errors.weight = 'Weight step must be more than 0, or left empty.';
+  }
   if (!isCount(ex.restBetweenSets) || ex.restBetweenSets < 0) {
     errors.restBetweenSets = 'Rest must be 0 seconds or more.';
   }

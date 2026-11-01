@@ -109,51 +109,53 @@ describe('simple loop', () => {
     expect(q.phase).toBe('set_active');
   });
 
-  it('skip set never rests and never alarms; lands paused at 0', () => {
+  it('skip set never rests and never alarms; lands ready on the next set', () => {
     const p = usePlayerStore();
     const events: string[] = [];
     p.onEvent((e) => events.push(e));
     const t = beginFirstSet(p);
     p.skipSet(t + 5_000);
-    expect(p.phase).toBe('paused');
-    expect(p.pausedFrom).toBe('set_active');
-    expect(p.elapsedMs).toBe(0);
+    expect(p.phase).toBe('ready');
     expect(p.setIndex).toBe(1);
     expect(p.session!.exercises[0]!.sets[0]!.outcome).toBe('skipped');
     expect(events.filter((e) => e === 'alarm')).toHaveLength(0);
-    p.toggleTimer(t + 6_000);
+    p.toggleTimer(t + 6_000); // tapping the timer starts the set
     expect(p.phase).toBe('set_active');
     expect(p.elapsedMs).toBe(0);
   });
 
-  it('skip from rest leaves rest and lands next work set paused at 0', () => {
+  it('skip during rest skips the upcoming set shown on screen and keeps the logged one', () => {
     const p = usePlayerStore();
     const events: string[] = [];
     p.onEvent((e) => events.push(e));
     const t = beginFirstSet(p);
     p.completeSet(t + 10_000);
     expect(p.phase).toBe('rest_set');
+    expect(p.setIndex).toBe(1); // the screen shows set 2 as up next
+    p.setReps(6);
     events.length = 0;
-    p.skipSet(t + 15_000); // skip upcoming set 2 while resting
-    expect(p.phase).toBe('paused');
-    expect(p.pausedFrom).toBe('set_active');
-    expect(p.elapsedMs).toBe(0);
+    p.skipSet(t + 15_000);
+    expect(p.phase).toBe('ready');
     expect(p.exerciseIndex).toBe(1);
     expect(p.setIndex).toBe(0);
+    const sets = p.session!.exercises[0]!.sets;
+    expect(sets.map((s) => [s.setIndex, s.outcome, s.actualReps])).toEqual([
+      [0, 'completed', 6],
+      [1, 'skipped', 0],
+    ]);
     expect(events.filter((e) => e === 'alarm')).toHaveLength(0);
   });
 
-  it('skip exercise jumps to next exercise paused at 0 with no rest or alarm', () => {
+  it('skip exercise logs the unlogged sets as skipped and lands ready on the next exercise', () => {
     const p = usePlayerStore();
     const events: string[] = [];
     p.onEvent((e) => events.push(e));
     const t = beginFirstSet(p);
     p.skipExercise(t + 1_000);
-    expect(p.phase).toBe('paused');
-    expect(p.pausedFrom).toBe('set_active');
-    expect(p.elapsedMs).toBe(0);
+    expect(p.phase).toBe('ready');
     expect(p.exerciseIndex).toBe(1);
     expect(p.setIndex).toBe(0);
+    expect(p.session!.exercises[0]!.sets.every((s) => s.outcome === 'skipped')).toBe(true);
     expect(events.filter((e) => e === 'alarm')).toHaveLength(0);
   });
 
@@ -184,6 +186,123 @@ describe('simple loop', () => {
     p.completeSet((t += 20_000));
     expect(p.phase).toBe('complete');
     expect(sessionVolume(p.session!).lb).toBe(100 * 8 * 2);
+  });
+});
+
+describe('navigation never deletes data', () => {
+  it('jumping ahead, then finishing, wraps back to the sets that were left open', () => {
+    const p = usePlayerStore();
+    let t = beginFirstSet(p);
+    p.jumpTo({ exerciseIndex: 1, setIndex: 0 }, (t += 1_000));
+    expect(p.phase).toBe('ready');
+    p.startSet((t += 1_000));
+    p.completeSet((t += 20_000));
+    // The next open set is back at the first exercise, after the exercise rest.
+    expect(p.phase).toBe('rest_exercise');
+    expect(p.exerciseIndex).toBe(0);
+    expect(p.setIndex).toBe(0);
+    p.tick((t += 90_000));
+    expect(p.phase).toBe('awaiting_set');
+    expect(p.session!.exercises[1]!.sets).toHaveLength(1);
+  });
+
+  it('back during rest redoes the set just finished; its log stays until redone', () => {
+    const p = usePlayerStore();
+    let t = beginFirstSet(p);
+    p.completeSet((t += 10_000));
+    p.setReps(5);
+    p.goBack((t += 2_000));
+    expect(p.phase).toBe('ready');
+    expect(p.setIndex).toBe(0);
+    expect(p.session!.exercises[0]!.sets[0]!.actualReps).toBe(5);
+    expect(p.currentSetPreviousLog?.actualReps).toBe(5);
+    p.startSet((t += 1_000));
+    p.completeSet((t += 10_000));
+    expect(p.pendingReps).toBe(5); // starts from what was logged before
+    p.setReps(8);
+    p.tick((t += 60_000));
+    const sets = p.session!.exercises[0]!.sets;
+    expect(sets).toHaveLength(1);
+    expect(sets[0]!.actualReps).toBe(8);
+  });
+
+  it('back outside rest moves to the previous set without touching logs', () => {
+    const p = usePlayerStore();
+    let t = beginFirstSet(p);
+    p.completeSet((t += 10_000));
+    p.tick((t += 60_000));
+    expect(p.setIndex).toBe(1);
+    p.goBack((t += 1_000));
+    expect(p.phase).toBe('ready');
+    expect(p.setIndex).toBe(0);
+    expect(p.session!.exercises[0]!.sets).toHaveLength(1);
+  });
+
+  it('back is disabled on the very first set', () => {
+    const p = usePlayerStore();
+    beginFirstSet(p);
+    expect(p.canGoBack).toBe(false);
+  });
+
+  it('plan shows a status for every set', () => {
+    const p = usePlayerStore();
+    const t = beginFirstSet(p);
+    p.completeSet(t + 10_000);
+    const statuses = p.plan.map((e) => e.sets.map((s) => s.status));
+    expect(statuses).toEqual([['pending', 'current'], ['open']]);
+  });
+});
+
+describe('tracking', () => {
+  it('end rest commits the log and starts the next set at once', () => {
+    const p = usePlayerStore();
+    let t = beginFirstSet(p);
+    p.completeSet((t += 10_000));
+    p.endRest((t += 20_000));
+    expect(p.phase).toBe('set_active');
+    expect(p.setIndex).toBe(1);
+    expect(p.session!.exercises[0]!.sets[0]!.restSeconds).toBe(20);
+  });
+
+  it('weight and effort are logged; a weight change carries to later sets', () => {
+    const p = usePlayerStore();
+    let t = beginFirstSet(p);
+    p.completeSet((t += 10_000));
+    p.setPendingWeight(110);
+    p.setPendingRir(2);
+    p.tick((t += 60_000));
+    const first = p.session!.exercises[0]!.sets[0]!;
+    expect(first.weight).toBe(110);
+    expect(first.rir).toBe(2);
+    expect(p.currentWeight).toBe(110);
+    p.startSet((t += 500));
+    p.completeSet((t += 10_000));
+    expect(p.pendingWeight).toBe(110);
+    expect(p.pendingRir).toBeNull();
+  });
+
+  it('a logged set can be corrected afterwards', () => {
+    const p = usePlayerStore();
+    let t = beginFirstSet(p);
+    p.completeSet((t += 10_000));
+    p.tick((t += 60_000));
+    p.editLoggedSet(0, 0, { actualReps: 0 });
+    expect(p.session!.exercises[0]!.sets[0]!.outcome).toBe('skipped');
+    p.editLoggedSet(0, 0, { actualReps: 7, weight: 95, rir: 1 });
+    const set = p.session!.exercises[0]!.sets[0]!;
+    expect([set.outcome, set.actualReps, set.weight, set.rir]).toEqual(['completed', 7, 95, 1]);
+  });
+
+  it('countdown ticks follow the configured seconds', () => {
+    const p = usePlayerStore();
+    p.setCountdownBeeps([5, 1]);
+    const events: string[] = [];
+    p.onEvent((e) => events.push(e));
+    const t = beginFirstSet(p);
+    p.completeSet(t + 10_000);
+    events.length = 0;
+    for (let ms = 50_000; ms < 60_000; ms += 100) p.tick(t + 10_000 + ms);
+    expect(events.filter((e) => e === 'beep')).toHaveLength(2);
   });
 });
 
@@ -247,5 +366,36 @@ describe('edge cases', () => {
     r.hydrate(snapshot, t + 10_000 + 100_000);
     expect(r.phase).toBe('awaiting_set');
     expect(r.session!.exercises[0]!.sets[0]!.actualReps).toBe(7);
+  });
+
+  it('hydrate maps the old paused-at-0:00 skip state to ready', () => {
+    const p = usePlayerStore();
+    const t = beginFirstSet(p);
+    const legacy = {
+      schemaVersion: SCHEMA_VERSION,
+      savedAt: new Date().toISOString(),
+      phase: 'paused',
+      pausedFrom: 'set_active',
+      workout: p.workout,
+      session: p.session,
+      exerciseIndex: 0,
+      setIndex: 1,
+      pending: null,
+      pendingReps: 0,
+      restStartedAt: null,
+      timer: {
+        kind: 'elapsed',
+        endsAt: null,
+        duration: null,
+        startedAt: t,
+        pausedRemaining: null,
+        pausedElapsed: 0,
+      },
+    };
+    setActivePinia(createPinia());
+    const r = usePlayerStore();
+    r.hydrate(JSON.parse(JSON.stringify(legacy)) as PersistedPlayerState, t + 5_000);
+    expect(r.phase).toBe('ready');
+    expect(r.weightOverrides).toEqual([null, null]);
   });
 });

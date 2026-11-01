@@ -62,23 +62,57 @@ test/                    Vitest suites driven with an explicit mocked clock
 
 ### The player state machine
 
-`stores/player.ts` is a headless Pinia store — the player screen only renders
+`stores/player.ts` is a headless Pinia store. The player screen only renders
 store state and dispatches actions. States:
-`set_active → rest → alarm → set_active → … → complete`.
-Rest ticks at 3–2–1, alarms at 0 until you tap **Stop alarm** (starts the next set).
+`set_active → rest → awaiting_set (alarm) → set_active → … → complete`,
+plus `ready` (a set is queued after a skip, jump or back: no timer, no alarm).
 
-Timing rules:
-
-- Countdowns store an absolute `endsAt` epoch; elapsed timers store
-  `startedAt`. Nothing counts interval ticks; `tick(now)` derives everything
-  from the wall clock, so throttled/backgrounded tabs reconcile exactly.
-- `tick` walks through *all* expired boundaries in order (rest end → intro
-  end → active set), anchoring each successor timer at the previous boundary.
-- A finished set becomes `pending` while its rest runs; the rep count commits
-  when the rest ends, or earlier via **Done**. Rep entry never blocks the
-  rest countdown.
+- **The cursor is the set on screen.** During rest it is the upcoming set,
+  so "Skip set 2" means exactly what it says.
+- **Navigation never deletes data.** Back, Jump (tap any set in the plan) and
+  Skip only move the cursor or log skipped sets. A logged set keeps its log
+  until it is completed again.
+- **After each set the player goes to the next set with no log**, wrapping to
+  earlier gaps, so jumping ahead never strands earlier sets.
+- **Rest logs the set just finished:** reps, the weight used, and reps left in
+  the tank. A weight change carries to the remaining sets of that exercise.
+- Countdowns store an absolute `endsAt`; elapsed timers store `startedAt`.
+  `tick(now)` derives everything from the wall clock, so throttled or
+  backgrounded pages reconcile exactly.
 - Every transition persists the full player state to IndexedDB, so a crash,
   refresh, or killed tab resumes exactly (including remaining rest).
+
+### Background timing and sound
+
+`lib/playerRuntime.ts` runs for the whole app, not just the player screen:
+
+- A 200 ms interval drives `tick()`. requestAnimationFrame stops in hidden
+  pages, but intervals keep running.
+- Sounds are placed ahead of time on the Web Audio clock (`lib/cuePlan.ts`
+  decides which), up to two minutes past the end of rest. The audio clock keeps
+  running when JavaScript is throttled, so the countdown and alarm play on time
+  when the app is in the background or the window is covered.
+- While a workout runs, an inaudible 30 Hz tone keeps the page counted as
+  "playing audio", which stops Chrome from throttling or freezing it
+  (Settings → *Keep alerts working in the background*).
+- Any tap revives an audio context the browser suspended.
+
+### Tracking
+
+`lib/stats.ts` provides last-time performance, estimated one-rep max (Epley),
+personal-record detection, plateau detection, and `progressionAdvice`.
+
+Progression is double progression. Each exercise has a rep range (bottom
+`targetReps`, optional top `repsMax`), an optional `weightStep`, and an
+optional `pairedDumbbells` flag (the weight is the total of two dumbbells,
+so the default step doubles). When every set reaches the top of the range,
+the app suggests one step up and the goal returns to the bottom. A set
+logged with 0 reps left in the tank delays that by one session.
+
+The player shows last time's numbers, the current goal, and a plateau
+notice. The summary flags records, lets you correct any set, and offers to
+update the plan's weight. History links each exercise to a trend page
+(`/history/exercise/:name`).
 
 ### Persistence
 
@@ -100,9 +134,10 @@ accent.
 
 - **iOS cannot vibrate**: `navigator.vibrate` does not exist in iOS Safari.
   Haptics degrade silently; audio cues are unaffected.
-- **iOS suppresses Web Audio while the screen is locked.** The player shows a
-  one-time note recommending keeping the screen on; the wake-lock setting
-  (default on) does that automatically while a workout runs.
+- **iOS suppresses Web Audio while the screen is locked or the app is in the
+  background.** Scheduled sound and the keep-alive tone cannot change that.
+  The wake-lock setting (default on) keeps the screen on while a workout runs.
+  Android and desktop browsers keep playing alerts in the background.
 - **The browser owns the storage.** IndexedDB can be evicted under storage
   pressure or by clearing site data. Settings surfaces this, shows the last
   export date, and nags when it is more than two weeks old.

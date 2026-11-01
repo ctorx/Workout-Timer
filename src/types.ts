@@ -7,7 +7,13 @@ export interface Exercise {
   weight: number; // >= 0; 0 means bodyweight
   unit: Unit;
   sets: number; // >= 1
-  targetReps: number; // >= 1
+  targetReps: number; // >= 1; the bottom of the rep range
+  /** Top of the rep range (double progression). Absent = a single target. */
+  repsMax?: number;
+  /** How much to add when progressing. Absent = the Settings step (doubled for pairs). */
+  weightStep?: number;
+  /** The weight is the total of two dumbbells (120 = two 60s). */
+  pairedDumbbells?: boolean;
   restBetweenSets: number; // seconds, >= 0
   restAfterExercise: number; // seconds, >= 0; ignored when this is the last exercise
   notes?: string;
@@ -37,6 +43,8 @@ export interface SetLog {
   completedAt: string;
   workSeconds: number; // measured active time for the set
   restSeconds: number; // actual rest taken after this set
+  /** Reps in reserve: how many more reps were left in the tank (optional). */
+  rir?: number;
 }
 
 export interface ExerciseLog {
@@ -68,6 +76,11 @@ export interface Settings {
   keepScreenAwake: boolean;
   countdownBeepsAt: number[]; // default [3, 2, 1]
   theme: 'dark' | 'light' | 'system';
+  /** Plays an inaudible tone during workouts so the browser keeps timers and sound running in the background. */
+  backgroundAudio: boolean;
+  /** Weight stepper increments. */
+  weightStepLb: number;
+  weightStepKg: number;
 }
 
 /* ------------------------------------------------------------------ */
@@ -77,7 +90,8 @@ export interface Settings {
 export type PlayerPhase =
   | 'idle'
   | 'exercise_intro' // legacy (hydrated sessions map to awaiting_set)
-  | 'awaiting_set' // rest over (or workout start): alarm until user starts the set
+  | 'ready' // a set is queued after a skip or jump: no timer, no alarm
+  | 'awaiting_set' // rest over: alarm until user starts the set
   | 'set_active'
   | 'rest_set'
   | 'rest_exercise'
@@ -124,6 +138,11 @@ export interface PersistedPlayerState {
   setIndex: number;
   pending: PendingSet | null;
   pendingReps: number;
+  /** Optional on older saved states. */
+  pendingWeight?: number;
+  pendingRir?: number | null;
+  /** Working weight per exercise when changed mid-session (null = planned weight). */
+  weightOverrides?: (number | null)[];
   restStartedAt: number | null;
   timer: TimerSnapshot;
 }

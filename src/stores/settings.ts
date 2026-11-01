@@ -11,6 +11,9 @@ export const DEFAULT_SETTINGS: Settings = {
   keepScreenAwake: true,
   countdownBeepsAt: [3, 2, 1],
   theme: 'dark',
+  backgroundAudio: true,
+  weightStepLb: 5,
+  weightStepKg: 2.5,
 };
 
 let mediaListenerAttached = false;

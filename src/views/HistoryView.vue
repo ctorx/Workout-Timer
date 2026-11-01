@@ -5,7 +5,10 @@ import { useSessionsStore } from '@/stores/sessions';
 import { useWorkoutsStore } from '@/stores/workouts';
 import {
   computeStreaks,
-  computeProgressions,
+  completedSetsInLastDays,
+  exerciseHistory,
+  formatPerformance,
+  formatWeight,
   sessionsInLastDays,
   sessionVolume,
   formatVolume,
@@ -78,12 +81,31 @@ const optionalIds = computed(
 const streaks = computed(() => computeStreaks(finished.value, optionalIds.value));
 const last7 = computed(() => sessionsInLastDays(finished.value, 7));
 const last30 = computed(() => sessionsInLastDays(finished.value, 30));
-const progressions = computed(() => computeProgressions(finished.value));
-const statsOpen = ref(false);
+const setsThisWeek = computed(() => completedSetsInLastDays(finished.value, 7));
+
+/** One row per exercise ever logged, most-trained first. */
+const exerciseRows = computed(() => {
+  const names = new Map<string, string>();
+  for (const s of finished.value) for (const ex of s.exercises) {
+    const key = ex.name.trim().toLowerCase();
+    if (!names.has(key)) names.set(key, ex.name);
+  }
+  return [...names.values()]
+    .map((name) => {
+      const h = exerciseHistory(finished.value, name);
+      const weighted = h.some((p) => p.topWeight > 0);
+      const series = h.map((p) => (weighted ? p.bestE1rm : Math.max(...p.sets.map((x) => x.actualReps))));
+      const last = h[h.length - 1];
+      return { name, sessions: h.length, series, last, weighted };
+    })
+    .filter((r) => r.sessions > 0)
+    .sort((a, b) => b.sessions - a.sessions || a.name.localeCompare(b.name));
+});
+const statsOpen = ref(true);
 </script>
 
 <template>
-  <main class="safe-top mx-auto w-full max-w-xl px-4 pb-6">
+  <main class="safe-top mx-auto w-full max-w-3xl px-4 pb-6">
     <header class="flex items-center justify-between gap-3 py-4">
       <h1 class="text-2xl font-bold tracking-tight">History</h1>
       <button
@@ -98,49 +120,50 @@ const statsOpen = ref(false);
 
     <!-- Stats summary -->
     <section class="rounded-2xl border border-border bg-surface-1 p-4">
-      <div class="tnum grid grid-cols-4 gap-2 text-center">
+      <div class="tnum grid grid-cols-2 gap-3 text-center sm:grid-cols-4">
         <div>
           <p class="text-2xl font-bold">{{ streaks.current }}</p>
-          <p class="text-[11px] text-muted">week streak</p>
-        </div>
-        <div>
-          <p class="text-2xl font-bold">{{ streaks.longest }}</p>
-          <p class="text-[11px] text-muted">best streak</p>
+          <p class="text-[11px] text-muted">week streak (best {{ streaks.longest }})</p>
         </div>
         <div>
           <p class="text-2xl font-bold">{{ last7 }}</p>
-          <p class="text-[11px] text-muted">last 7 days</p>
+          <p class="text-[11px] text-muted">workouts, last 7 days</p>
+        </div>
+        <div>
+          <p class="text-2xl font-bold">{{ setsThisWeek }}</p>
+          <p class="text-[11px] text-muted">working sets, last 7 days</p>
         </div>
         <div>
           <p class="text-2xl font-bold">{{ last30 }}</p>
-          <p class="text-[11px] text-muted">last 30 days</p>
+          <p class="text-[11px] text-muted">workouts, last 30 days</p>
         </div>
       </div>
 
-      <template v-if="progressions.length > 0">
+      <template v-if="exerciseRows.length > 0">
         <button
           type="button"
           class="mt-3 flex min-h-[44px] w-full items-center justify-between border-t border-border pt-2 text-sm font-medium text-muted"
           :aria-expanded="statsOpen"
           @click="statsOpen = !statsOpen"
         >
-          Exercise progression
+          Progress by exercise
           <span aria-hidden="true">{{ statsOpen ? '▾' : '▸' }}</span>
         </button>
-        <ul v-if="statsOpen" class="mt-1 space-y-3">
-          <li
-            v-for="p in progressions"
-            :key="p.name"
-            class="flex items-center justify-between gap-3"
-          >
-            <div class="min-w-0">
-              <p class="truncate text-sm font-medium">{{ p.name }}</p>
-              <p class="tnum text-xs text-muted">
-                Best {{ p.heaviestWeight }} {{ p.unit }} · top set
-                {{ Math.round(p.bestSetVolume).toLocaleString() }} {{ p.unit }}
-              </p>
-            </div>
-            <SparkLine :values="p.volumeSeries.map((v) => v.volume)" />
+        <ul v-if="statsOpen" class="mt-1 grid gap-1 sm:grid-cols-2">
+          <li v-for="r in exerciseRows" :key="r.name">
+            <router-link
+              :to="{ name: 'exercise-detail', params: { name: r.name } }"
+              class="flex items-center justify-between gap-3 rounded-xl px-2 py-2 hover:bg-surface-2"
+            >
+              <div class="min-w-0">
+                <p class="truncate text-sm font-medium">{{ r.name }}</p>
+                <p class="tnum truncate text-xs text-muted">
+                  <template v-if="r.last">{{ formatPerformance(r.last.sets) }}</template>
+                  <template v-if="r.weighted && r.last"> · e1RM {{ formatWeight(Math.round(r.last.bestE1rm)) }}</template>
+                </p>
+              </div>
+              <SparkLine :values="r.series" :width="80" :height="28" />
+            </router-link>
           </li>
         </ul>
       </template>

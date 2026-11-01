@@ -6,6 +6,8 @@ import { useWorkoutsStore } from '@/stores/workouts';
 import { validateWorkout, workoutIsValid } from '@/lib/validation';
 import { uuid } from '@/lib/id';
 import { DAY_NAMES_SHORT } from '@/lib/time';
+import { weightStepFor } from '@/lib/stats';
+import { useSettingsStore } from '@/stores/settings';
 import ConfirmDialog from '@/components/ConfirmDialog.vue';
 
 const route = useRoute();
@@ -102,6 +104,40 @@ function fieldNum(e: Event): number {
   const v = Number.parseFloat((e.target as HTMLInputElement).value);
   return Number.isFinite(v) ? v : Number.NaN;
 }
+/* ---------------------------- progression ---------------------------- */
+
+const settingsStore = useSettingsStore();
+
+function defaultStep(ex: Exercise): number {
+  return weightStepFor({ unit: ex.unit, pairedDumbbells: ex.pairedDumbbells }, settingsStore.settings);
+}
+
+/** An empty top-of-range box means a single target. */
+function setRepsMax(ex: Exercise, e: Event): void {
+  const raw = (e.target as HTMLInputElement).value.trim();
+  if (raw === '') {
+    delete ex.repsMax;
+    return;
+  }
+  const v = Number.parseInt(raw, 10);
+  ex.repsMax = Number.isFinite(v) ? v : Number.NaN;
+}
+
+function setWeightStep(ex: Exercise, e: Event): void {
+  const raw = (e.target as HTMLInputElement).value.trim();
+  if (raw === '') {
+    delete ex.weightStep;
+    return;
+  }
+  const v = Number.parseFloat(raw);
+  ex.weightStep = Number.isFinite(v) ? v : Number.NaN;
+}
+
+function setPaired(ex: Exercise, e: Event): void {
+  if ((e.target as HTMLInputElement).checked) ex.pairedDumbbells = true;
+  else delete ex.pairedDumbbells;
+}
+
 function fieldInt(e: Event): number {
   const v = Number.parseInt((e.target as HTMLInputElement).value, 10);
   return Number.isFinite(v) ? v : Number.NaN;
@@ -109,7 +145,7 @@ function fieldInt(e: Event): number {
 </script>
 
 <template>
-  <main class="safe-top mx-auto w-full max-w-xl px-4 pb-8">
+  <main class="safe-top mx-auto w-full max-w-2xl px-4 pb-8">
     <div v-if="notFound" class="mt-16 text-center text-muted">
       <p>This workout no longer exists.</p>
       <router-link :to="{ name: 'today' }" class="mt-2 inline-block text-accent underline">
@@ -276,15 +312,16 @@ function fieldInt(e: Event): number {
             <p v-if="exError(ex, 'weight')" class="mt-1 text-xs text-danger">{{ exError(ex, 'weight') }}</p>
           </div>
           <div>
-            <label :for="`s-${ex.id}`" class="text-xs text-faint">Sets × reps</label>
-            <div class="mt-1 flex items-center gap-1.5">
+            <label :for="`s-${ex.id}`" class="text-xs text-faint">Sets × rep range</label>
+            <div class="mt-1 flex items-center gap-1">
               <input
                 :id="`s-${ex.id}`"
                 type="number"
                 inputmode="numeric"
                 min="1"
                 :value="ex.sets"
-                class="tnum w-full rounded-xl border bg-surface-2 px-3 py-2.5"
+                :aria-label="`Exercise ${i + 1} sets`"
+                class="tnum w-full min-w-0 rounded-xl border bg-surface-2 px-2 py-2.5 text-center"
                 :class="exError(ex, 'sets') ? 'border-danger' : 'border-border'"
                 @input="ex.sets = fieldInt($event)"
               />
@@ -294,10 +331,22 @@ function fieldInt(e: Event): number {
                 inputmode="numeric"
                 min="1"
                 :value="ex.targetReps"
-                :aria-label="`Exercise ${i + 1} target reps`"
-                class="tnum w-full rounded-xl border bg-surface-2 px-3 py-2.5"
+                :aria-label="`Exercise ${i + 1} lowest reps in the range`"
+                class="tnum w-full min-w-0 rounded-xl border bg-surface-2 px-2 py-2.5 text-center"
                 :class="exError(ex, 'targetReps') ? 'border-danger' : 'border-border'"
                 @input="ex.targetReps = fieldInt($event)"
+              />
+              <span class="text-faint">–</span>
+              <input
+                type="number"
+                inputmode="numeric"
+                min="1"
+                :value="ex.repsMax ?? ''"
+                :placeholder="String(ex.targetReps || '')"
+                :aria-label="`Exercise ${i + 1} highest reps in the range (empty for a single target)`"
+                class="tnum w-full min-w-0 rounded-xl border bg-surface-2 px-2 py-2.5 text-center"
+                :class="exError(ex, 'targetReps') ? 'border-danger' : 'border-border'"
+                @input="setRepsMax(ex, $event)"
               />
             </div>
             <p v-if="exError(ex, 'sets')" class="mt-1 text-xs text-danger">{{ exError(ex, 'sets') }}</p>
@@ -338,6 +387,50 @@ function fieldInt(e: Event): number {
               Skipped for the last exercise.
             </p>
           </div>
+        </div>
+
+        <!-- Progression -->
+        <div class="mt-3 rounded-xl border border-border/70 p-3">
+          <p class="text-xs font-semibold uppercase tracking-widest text-faint">Progression</p>
+          <div class="mt-2 grid grid-cols-2 gap-3">
+            <div>
+              <label :for="`ws-${ex.id}`" class="text-xs text-faint">Add this much ({{ ex.unit }})</label>
+              <input
+                :id="`ws-${ex.id}`"
+                type="number"
+                inputmode="decimal"
+                min="0"
+                step="0.5"
+                :value="ex.weightStep ?? ''"
+                :placeholder="`${defaultStep(ex)} (default)`"
+                class="tnum mt-1 w-full rounded-xl border border-border bg-surface-2 px-3 py-2.5"
+                @input="setWeightStep(ex, $event)"
+              />
+            </div>
+            <label class="flex items-center gap-2 self-end pb-2 text-sm">
+              <input
+                type="checkbox"
+                class="h-5 w-5 shrink-0 accent-[var(--c-accent)]"
+                :checked="!!ex.pairedDumbbells"
+                @change="setPaired(ex, $event)"
+              />
+              <span>
+                Two dumbbells
+                <span class="block text-xs text-faint">Weight is the pair total</span>
+              </span>
+            </label>
+          </div>
+          <p class="mt-2 text-xs text-faint">
+            <template v-if="ex.repsMax && ex.repsMax > ex.targetReps">
+              Work up from {{ ex.targetReps }} to {{ ex.repsMax }} reps. When every set reaches
+              {{ ex.repsMax }}, the app suggests adding {{ ex.weightStep ?? defaultStep(ex) }} {{ ex.unit }}.
+            </template>
+            <template v-else>
+              When every set reaches {{ ex.targetReps || '–' }} reps, the app suggests adding
+              {{ ex.weightStep ?? defaultStep(ex) }} {{ ex.unit }}. Set a rep range above to work up
+              before adding weight.
+            </template>
+          </p>
         </div>
 
         <label :for="`n-${ex.id}`" class="mt-3 block text-xs text-faint">Notes</label>

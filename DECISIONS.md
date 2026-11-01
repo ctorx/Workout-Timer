@@ -39,35 +39,67 @@ up. Section references are to the build prompt (`plan.md`).
 
 ## Player semantics
 
-- **Cursor convention:** `(exerciseIndex, setIndex)` always points at the set
-  being performed or *prepared*. When a set finishes, the cursor advances
-  immediately and the finished set becomes `pending` while its rest runs.
-  This makes the transport buttons unambiguous during rest: *Previous set*
-  re-enters the set you just finished; *Skip set* skips the upcoming one.
-- **Skip set runs the skipped set's rest** ("advance as if completed", §6
-  verbatim). The rep stepper still shows during that rest pre-filled with 0,
-  so a mis-tap is recoverable by dialing the real rep count back in.
-- **A committed rep count of 0 records the set as `skipped`** — outcome
-  follows the data (0 reps = no work done), regardless of which button got
-  the user there.
-- **Skip exercise goes straight to the next exercise's intro** with no
-  `restAfterExercise` (you didn't do the work, you don't need its rest).
-  §6 says "advance to the next exercise's rest/intro"; intro was chosen.
-- **Previous exercise enters the target exercise's intro** (5 s to get set
-  up) rather than dropping straight into `set_active`. It is disabled at
-  exercise 0, mirroring the previous-set rule at (0, 0).
+- **Cursor convention (revised):** `(exerciseIndex, setIndex)` is always
+  the set shown on screen. When a set finishes, the cursor moves to the next
+  set with no log and the finished set becomes `pending` while its rest
+  runs. Every control is labeled with the set it acts on ("Skip set 2",
+  "Redo set 1"), which removed the old ambiguity of icon-only buttons.
+- **Skip lands in a `ready` state**, not "paused at 0:00". `ready` has no
+  timer and no alarm, and the main button reads "Start set N". The old
+  paused-at-zero state looked frozen behind a dimmed overlay.
+- **Back, Jump and Skip never delete logs.** The original Previous set and
+  Previous exercise discarded every log at or after the target, so a
+  mis-tap lost real data. Now a logged set keeps its log until it is
+  completed again, and the logger starts from the old values when redoing.
+- **The next set is the next one without a log, wrapping around.** Jumping
+  ahead and coming back works without manual bookkeeping. The workout
+  completes when every set has a log (completed or skipped).
+- **Rest has an explicit "End rest · start set N" button.** The earlier
+  "Done" button was removed because it was ambiguous. A label that names
+  both effects is not, and starting early is a normal need.
+- **Rest logs weight and effort, not just reps.** Weight per set was already
+  in the data model but could not be changed. A weight change carries to
+  the rest of that exercise in this session only. The summary offers to
+  save it to the plan. Effort is "reps left in the tank" (0 to 4+), stored
+  as optional `rir` on `SetLog`, so older data and backups stay valid.
+- **The summary screen can correct any set**, not only the final one.
+  Sessions remain read-only after saving.
+- **Personal records compare against earlier sessions only** (estimated
+  one-rep max for weighted sets, reps for bodyweight). A first-ever
+  session shows no records.
+- **Progression is double progression over a rep range.** Each exercise
+  has a range: `targetReps` is the bottom and the optional `repsMax` is the
+  top. An empty top means a single target, which behaves like a range of
+  one. Work up through the range at one weight. When every planned set
+  reaches the top, the app suggests one weight step and the goal returns to
+  the bottom of the range. The range itself never changes, so "resetting
+  to the bottom" needs no stored state.
+- **A set taken to failure delays the weight increase.** If every set hit
+  the top but any set was logged with 0 reps left in the tank, the advice
+  is to repeat the weight once. Sets with no effort logged count as not to
+  failure, so the rule still works when effort is not logged.
+- **The weight step belongs to the exercise.** An exercise can set its own
+  `weightStep`. Otherwise it uses the Settings step for its unit, doubled
+  when `pairedDumbbells` is set, because the stored weight is the total of
+  two dumbbells (120 lb = two 60s) and the next real option is two 65s.
+  Paired weights display as "120 lb (2 × 60)".
+- **A plateau is three sessions without a new best**, measured by the
+  estimated one-rep max (or most reps for bodyweight), and needs at least
+  four sessions of history. The app only points it out. It never changes
+  the plan.
+- **Advice is a suggestion.** Nothing changes the plan without a tap on
+  "Update plan". Advice that has already been applied (the plan weight is
+  already at the suggested weight) turns into "New weight today".
 - **Transport actions while paused auto-resume first**, then apply. The tray
   stays available in every non-terminal state as specified, and this avoids
   a "frozen but mutated" state.
-- **The final set of the workout has no rest, so no stepper screen.** Its
-  reps auto-commit at target, and the completion summary shows a stepper to
-  adjust the final set's count before *Save & finish*. This is the only place
-  reps are editable after commit; rewinding out of `complete` stays
-  unsupported per §6.
-- **Simple rest loop.** Set complete → log reps during rest → ticks at 3, 2, 1
-  → alarm at 0 (`awaiting_set`) until the user taps **Stop alarm**, which
-  starts the next set. Same between exercises. No Done button; rest never
-  auto-starts work. (Overrides plan §6.)
+- **The final set of the workout has no rest, so no logger during rest.**
+  Its reps commit at target and the completion summary lets you correct it,
+  along with any other set, before *Save & finish*.
+- **Simple rest loop.** Finish set → log the set during rest → countdown
+  ticks (Settings → countdown beeps, which the player previously ignored) →
+  alarm at 0 (`awaiting_set`) until the user taps **Start set N**. Same
+  between exercises. Rest never auto-starts work. (Overrides plan §6.)
 - **The start sheet's "Start workout" tap is the audio-unlocking gesture and
   starts the player directly.** The player's `idle` pre-flight state (with
   its own Start button, also unlocking audio) appears only when navigating to
@@ -80,9 +112,18 @@ up. Section references are to the build prompt (`plan.md`).
   are still resting; the log records wall-clock rest actually taken. Pausing
   during a *set* excludes the paused span from `workSeconds` (the timer is
   frozen).
-- **Catch-up transitions older than ~1.5 s fire no audio cues.** Returning
-  from a long background gap replays the machine silently instead of a stack
-  of stale beeps (the AudioContext was suspended anyway).
+- **Sound is scheduled, not fired from the clock.** The player computes the
+  upcoming cues from its state and places them on the Web Audio timeline up
+  to two minutes ahead. This is what makes alerts work while the page is in
+  the background. Cues more than 300 ms late are dropped instead of played
+  stale. Vibration still follows the clock, since it cannot be scheduled.
+- **An inaudible keep-alive tone runs during workouts** (30 Hz at about
+  -56 dB, toggle in Settings) so Chrome treats the page as playing audio and
+  does not throttle or freeze it. iOS ignores this and still suspends web
+  audio when locked.
+- **The player clock and cues live in `lib/playerRuntime.ts`**, started once
+  at boot. Before, they lived in the player screen and stopped whenever that
+  screen was not mounted or the page was hidden.
 - **`durationSeconds` is wall time** from start to end; "active time" on the
   detail screen is Σ `workSeconds`. Pauses therefore show up as the gap
   between duration and active+rest, which matches intuition about "how long
@@ -93,6 +134,9 @@ up. Section references are to the build prompt (`plan.md`).
 
 ## Screens
 
+- **On screens 768 px and wider the tab bar becomes a left rail**, and the
+  player shows the workout plan beside the timer from 1024 px. Space or Enter
+  runs the main player button on desktop.
 - **Tab bar has three tabs** (Today, History, Settings). §5 says "bottom tab
   bar for the first four" screens, but the editor is per-workout
   (`/workouts/:id/edit`) and unreachable as a bare tab; it keeps the tab bar
@@ -162,5 +206,5 @@ up. Section references are to the build prompt (`plan.md`).
 
 - No File System Access API, no background sync, no share targets.
 - No exercise database, plate calculators, or rest suggestions — §14.
-- Sessions are never editable after saving (except the final-set rep count
-  on the completion screen, before saving).
+- Sessions are never editable after saving. Any set can be corrected on the
+  completion screen before saving.

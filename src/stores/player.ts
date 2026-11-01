@@ -1,16 +1,25 @@
 /**
  * The player: a headless finite state machine driving the workout.
  *
- * Simple loop (same between sets and between exercises):
- *   set_active (work timer) → Set complete → rest (enter reps) →
- *   ticks at 3, 2, 1 → alarm at 0 (awaiting_set) → user stops alarm →
- *   next set_active → …
+ * Loop (same between sets and between exercises):
+ *   set_active (work timer) → Finish set → rest (log reps, weight, effort) →
+ *   countdown ticks → alarm at 0 (awaiting_set) → Start set → set_active → …
  *
- * Rest never auto-starts the next set. Alarm keeps firing until the user
- * taps Stop alarm. Skip set / skip exercise never enter rest and never
- * ring the alarm — they jump to the next set paused at 0:00;
- * the user taps the timer to start.
- * Time is wall-clock based (no setInterval accumulation).
+ * The cursor (exerciseIndex, setIndex) is always the set shown on screen as
+ * "this set": the one being worked, or the one coming up during rest.
+ * Every control acts on that set, so labels can name it exactly.
+ *
+ * Navigation never deletes data:
+ * - Skip set / skip exercise log the unlogged sets as skipped and land on
+ *   the next open set in the `ready` state (no timer, no alarm).
+ * - Back and Jump only move the cursor. A set that is already logged keeps
+ *   its log until it is completed again, which overwrites it.
+ * - After any set, the player goes to the next set that has no log yet,
+ *   wrapping to earlier gaps, so jumping ahead never strands earlier sets.
+ *
+ * Time is wall-clock based (no setInterval accumulation). Sound is
+ * scheduled ahead of time by lib/playerRuntime from this state, so the
+ * alarm still fires when the page is in the background.
  */
 import { computed, ref } from 'vue';
 import { defineStore } from 'pinia';
@@ -26,29 +35,44 @@ import type {
 } from '@/types';
 import { SCHEMA_VERSION } from '@/types';
 import { uuid } from '@/lib/id';
-import {
-  clearPlayerState,
-  savePlayerState,
-  StorageWriteError,
-} from '@/lib/persistence';
+import { clearPlayerState, savePlayerState, StorageWriteError } from '@/lib/persistence';
 import { useSessionsStore } from '@/stores/sessions';
 
-/** How often the post-rest alarm re-fires until the user stops it. */
+/** How often the post-rest alarm repeats until the user starts the set. */
 export const ALARM_INTERVAL_MS = 1000;
 
-/** Rest countdown ticks — always 3, 2, 1 then alarm at 0. */
+/** Default rest countdown ticks (Settings can override them). */
 export const REST_TICKS_AT = [3, 2, 1];
 
 export type PlayerEventType = 'beep' | 'go' | 'alarm' | 'new_exercise' | 'complete';
 
-const TIMED_PHASES: PlayerPhase[] = [
-  'awaiting_set',
-  'set_active',
-  'rest_set',
-  'rest_exercise',
-  'exercise_intro',
-];
+export interface Position {
+  exerciseIndex: number;
+  setIndex: number;
+}
+
+export type PlanSetStatus = 'completed' | 'skipped' | 'pending' | 'current' | 'open';
+
+export interface PlanSet {
+  setIndex: number;
+  status: PlanSetStatus;
+  /** Logged (or pending) reps, when there are any. */
+  reps: number | null;
+  /** Logged (or pending) weight, when there is one. */
+  weight: number | null;
+}
+
+export interface PlanExercise {
+  exerciseIndex: number;
+  exercise: Exercise;
+  workingWeight: number;
+  sets: PlanSet[];
+  isCurrent: boolean;
+}
+
+const TIMED_PHASES: PlayerPhase[] = ['set_active', 'rest_set', 'rest_exercise'];
 const REST_PHASES: PlayerPhase[] = ['rest_set', 'rest_exercise'];
+const WAITING_PHASES: PlayerPhase[] = ['ready', 'awaiting_set', 'exercise_intro'];
 
 function emptyTimer(): TimerSnapshot {
   return {
@@ -74,10 +98,15 @@ export const usePlayerStore = defineStore('player', () => {
   const setIndex = ref(0);
   const pending = ref<PendingSet | null>(null);
   const pendingReps = ref(0);
+  const pendingWeight = ref(0);
+  const pendingRir = ref<number | null>(null);
+  const weightOverrides = ref<(number | null)[]>([]);
   const restStartedAt = ref<number | null>(null);
   const timer = ref<TimerSnapshot>(emptyTimer());
   const nowMs = ref(0);
   const storageError = ref<string | null>(null);
+  /** Seconds before the end of rest at which a tick sounds. */
+  const countdownBeepsAt = ref<number[]>([...REST_TICKS_AT]);
 
   let lastCueSecond: number | null = null;
   let lastAlarmPulse = -1;
@@ -96,11 +125,65 @@ export const usePlayerStore = defineStore('player', () => {
     for (const cb of listeners) cb(event);
   }
 
+  /* --------------------------- position helpers ---------------------- */
+
+  function exerciseAt(i: number): Exercise | null {
+    return workout.value?.exercises[i] ?? null;
+  }
+
+  function workingWeight(i: number): number {
+    const override = weightOverrides.value[i];
+    if (typeof override === 'number') return override;
+    return exerciseAt(i)?.weight ?? 0;
+  }
+
+  function logFor(exIdx: number, setIdx: number): SetLog | undefined {
+    return session.value?.exercises[exIdx]?.sets.find((s) => s.setIndex === setIdx);
+  }
+
+  function isPendingAt(exIdx: number, setIdx: number): boolean {
+    const p = pending.value;
+    return p !== null && p.exerciseIndex === exIdx && p.setIndex === setIdx;
+  }
+
+  /** Every set in workout order. */
+  function allPositions(): Position[] {
+    const out: Position[] = [];
+    (workout.value?.exercises ?? []).forEach((ex, e) => {
+      for (let s = 0; s < ex.sets; s++) out.push({ exerciseIndex: e, setIndex: s });
+    });
+    return out;
+  }
+
+  function orderOf(pos: Position): number {
+    return allPositions().findIndex(
+      (p) => p.exerciseIndex === pos.exerciseIndex && p.setIndex === pos.setIndex,
+    );
+  }
+
+  function isOpen(pos: Position): boolean {
+    return !logFor(pos.exerciseIndex, pos.setIndex) && !isPendingAt(pos.exerciseIndex, pos.setIndex);
+  }
+
+  /**
+   * The next set with no log after `from`, wrapping to earlier gaps.
+   * `from` itself is never returned.
+   */
+  function nextOpenAfter(from: Position): Position | null {
+    const all = allPositions();
+    const start = orderOf(from);
+    for (let k = 1; k < all.length; k++) {
+      const pos = all[(start + k) % all.length]!;
+      if (isOpen(pos)) return pos;
+    }
+    return null;
+  }
+
   /* ----------------------------- getters ----------------------------- */
 
-  const currentExercise = computed<Exercise | null>(
-    () => workout.value?.exercises[exerciseIndex.value] ?? null,
-  );
+  const currentExercise = computed<Exercise | null>(() => exerciseAt(exerciseIndex.value));
+
+  const currentWeight = computed(() => workingWeight(exerciseIndex.value));
 
   const totalExercises = computed(() => workout.value?.exercises.length ?? 0);
 
@@ -109,6 +192,10 @@ export const usePlayerStore = defineStore('player', () => {
   );
 
   const isRestPhase = computed(() => REST_PHASES.includes(phase.value));
+
+  const effectivePhase = computed<PlayerPhase>(() =>
+    phase.value === 'paused' ? (pausedFrom.value ?? 'paused') : phase.value,
+  );
 
   /** Remaining ms for the active countdown (0 when none). */
   const remainingMs = computed(() => {
@@ -120,7 +207,7 @@ export const usePlayerStore = defineStore('player', () => {
     return Math.max(0, t.endsAt - nowMs.value);
   });
 
-  /** Elapsed ms for the active set (counts up). */
+  /** Elapsed ms for the active set or alarm (counts up). */
   const elapsedMs = computed(() => {
     const t = timer.value;
     if (phase.value === 'paused') {
@@ -133,12 +220,8 @@ export const usePlayerStore = defineStore('player', () => {
   /** 1 → full ring, draining to 0 for countdowns. */
   const countdownFraction = computed(() => {
     const t = timer.value;
-    const isCountdown =
-      t.kind === 'countdown' ||
-      (phase.value === 'paused' && t.pausedRemaining !== null);
-    if (!isCountdown || !t.duration || t.duration <= 0) return 0;
-    const rem = phase.value === 'paused' ? (t.pausedRemaining ?? 0) : remainingMs.value;
-    return Math.min(1, Math.max(0, rem / t.duration));
+    if (t.kind !== 'countdown' || !t.duration || t.duration <= 0) return 0;
+    return Math.min(1, Math.max(0, remainingMs.value / t.duration));
   });
 
   const totalSets = computed(() =>
@@ -156,16 +239,62 @@ export const usePlayerStore = defineStore('player', () => {
     return Math.min(1, done / totalSets.value);
   });
 
-  const effectivePhase = computed<PlayerPhase>(() =>
-    phase.value === 'paused' ? (pausedFrom.value ?? 'paused') : phase.value,
+  /** 1-based position of the cursor in the whole workout. */
+  const overallSetNumber = computed(() =>
+    orderOf({ exerciseIndex: exerciseIndex.value, setIndex: setIndex.value }) + 1,
   );
 
-  const canPreviousSet = computed(() => {
-    if (!isRunning.value || phase.value === 'idle') return false;
-    return pending.value !== null || setIndex.value > 0 || exerciseIndex.value > 0;
+  /** The set the player goes to after the current one (null = workout ends). */
+  const upNext = computed<Position | null>(() => {
+    if (!isRunning.value) return null;
+    // During rest the cursor already is the upcoming set.
+    if (REST_PHASES.includes(effectivePhase.value)) {
+      return { exerciseIndex: exerciseIndex.value, setIndex: setIndex.value };
+    }
+    return nextOpenAfter({ exerciseIndex: exerciseIndex.value, setIndex: setIndex.value });
   });
 
-  const canPreviousExercise = computed(() => isRunning.value && exerciseIndex.value > 0);
+  /** Rest that will run before `upNext`, in seconds (during work/ready only). */
+  const restBeforeUpNext = computed(() => {
+    const next = upNext.value;
+    const ex = currentExercise.value;
+    if (!next || !ex) return 0;
+    if (REST_PHASES.includes(effectivePhase.value)) return 0;
+    return next.exerciseIndex === exerciseIndex.value ? ex.restBetweenSets : ex.restAfterExercise;
+  });
+
+  /** The full plan with per-set status, for the plan list and jump. */
+  const plan = computed<PlanExercise[]>(() =>
+    (workout.value?.exercises ?? []).map((ex, e) => ({
+      exerciseIndex: e,
+      exercise: ex,
+      workingWeight: workingWeight(e),
+      isCurrent: e === exerciseIndex.value,
+      sets: Array.from({ length: ex.sets }, (_, s): PlanSet => {
+        if (isPendingAt(e, s)) {
+          return { setIndex: s, status: 'pending', reps: pendingReps.value, weight: pendingWeight.value };
+        }
+        if (e === exerciseIndex.value && s === setIndex.value && isRunning.value) {
+          const log = logFor(e, s);
+          return { setIndex: s, status: 'current', reps: log?.actualReps ?? null, weight: log?.weight ?? null };
+        }
+        const log = logFor(e, s);
+        if (log) {
+          return { setIndex: s, status: log.outcome, reps: log.actualReps, weight: log.weight };
+        }
+        return { setIndex: s, status: 'open', reps: null, weight: null };
+      }),
+    })),
+  );
+
+  /** The log already stored for the cursor set (when redoing a set). */
+  const currentSetPreviousLog = computed(() => logFor(exerciseIndex.value, setIndex.value) ?? null);
+
+  const canGoBack = computed(() => {
+    if (!isRunning.value) return false;
+    if (pending.value) return true;
+    return orderOf({ exerciseIndex: exerciseIndex.value, setIndex: setIndex.value }) > 0;
+  });
 
   /* --------------------------- persistence --------------------------- */
 
@@ -182,6 +311,9 @@ export const usePlayerStore = defineStore('player', () => {
         setIndex: setIndex.value,
         pending: pending.value,
         pendingReps: pendingReps.value,
+        pendingWeight: pendingWeight.value,
+        pendingRir: pendingRir.value,
+        weightOverrides: weightOverrides.value,
         restStartedAt: restStartedAt.value,
         timer: timer.value,
       }),
@@ -228,30 +360,35 @@ export const usePlayerStore = defineStore('player', () => {
 
   /* --------------------------- transitions --------------------------- */
 
-  /** Rest over (or workout start): alarm until the user starts the set. */
+  /** Rest is over: alarm until the user starts the set. */
   function enterAwaitingSet(now: number, cue = true): void {
     phase.value = 'awaiting_set';
+    pausedFrom.value = null;
     restStartedAt.value = null;
     startElapsed(now);
-    lastAlarmPulse = -1;
+    lastAlarmPulse = 0;
     if (cue) emit('alarm');
   }
 
   function enterSetActive(now: number, cue = true): void {
     phase.value = 'set_active';
+    pausedFrom.value = null;
     restStartedAt.value = null;
     startElapsed(now);
     lastAlarmPulse = -1;
     if (cue) emit('go');
   }
 
-  /** Next set ready at 0:00 — paused until the user taps the timer. */
-  function enterSetReady(now: number): void {
-    enterSetActive(now, false);
-    pause(now);
+  /** A set is queued (after skip, jump or back): no timer, no alarm. */
+  function enterReady(): void {
+    phase.value = 'ready';
+    pausedFrom.value = null;
+    restStartedAt.value = null;
+    timer.value = emptyTimer();
+    lastAlarmPulse = -1;
   }
 
-  /** Writes the pending set's log with the currently displayed rep count. */
+  /** Writes the pending set's log with the values shown in the logger. */
   function commitPending(now: number): void {
     const p = pending.value;
     if (!p || !session.value) return;
@@ -260,7 +397,7 @@ export const usePlayerStore = defineStore('player', () => {
       setIndex: p.setIndex,
       targetReps: p.targetReps,
       actualReps: reps,
-      weight: p.weight,
+      weight: Math.max(0, pendingWeight.value),
       unit: p.unit,
       outcome: reps > 0 ? 'completed' : 'skipped',
       startedAt: p.startedAt,
@@ -271,56 +408,37 @@ export const usePlayerStore = defineStore('player', () => {
           ? Math.max(0, Math.round((now - restStartedAt.value) / 1000))
           : 0,
     };
-    const exLog = session.value.exercises[p.exerciseIndex];
-    if (exLog) {
-      exLog.sets = exLog.sets
-        .filter((s) => s.setIndex !== log.setIndex)
-        .concat([log])
-        .sort((a, b) => a.setIndex - b.setIndex);
-    }
+    if (pendingRir.value !== null) log.rir = pendingRir.value;
+    writeLog(p.exerciseIndex, log);
     pending.value = null;
+    pendingRir.value = null;
     restStartedAt.value = null;
   }
 
-  /**
-   * After a set finishes (completed or skipped): move the cursor forward
-   * and enter the matching rest — or pass straight through zero rests.
-   */
-  function advanceAfterSet(now: number): void {
-    const w = workout.value;
-    const ex = currentExercise.value;
-    if (!w || !ex) return;
-    const isLastSet = setIndex.value >= ex.sets - 1;
-    const isLastExercise = exerciseIndex.value >= w.exercises.length - 1;
+  function writeLog(exIdx: number, log: SetLog): void {
+    const exLog = session.value?.exercises[exIdx];
+    if (!exLog) return;
+    exLog.sets = exLog.sets
+      .filter((s) => s.setIndex !== log.setIndex)
+      .concat([log])
+      .sort((a, b) => a.setIndex - b.setIndex);
+  }
 
-    if (!isLastSet) {
-      setIndex.value += 1;
-      if (ex.restBetweenSets > 0) {
-        phase.value = 'rest_set';
-        restStartedAt.value = now;
-        startCountdown(now, ex.restBetweenSets * 1000);
-      } else {
-        commitPending(now);
-        enterAwaitingSet(now);
-      }
-    } else if (!isLastExercise) {
-      exerciseIndex.value += 1;
-      setIndex.value = 0;
-      if (ex.restAfterExercise > 0) {
-        phase.value = 'rest_exercise';
-        restStartedAt.value = now;
-        startCountdown(now, ex.restAfterExercise * 1000);
-      } else {
-        commitPending(now);
-        enterAwaitingSet(now, true);
-        emit('new_exercise');
-      }
-    } else {
-      // Last set of the last exercise: restAfterExercise never runs.
-      commitPending(now);
-      goComplete(now);
-    }
-    persistNow();
+  function writeSkippedSet(exIdx: number, setIdx: number, now: number): void {
+    const ex = exerciseAt(exIdx);
+    if (!ex) return;
+    writeLog(exIdx, {
+      setIndex: setIdx,
+      targetReps: ex.targetReps,
+      actualReps: 0,
+      weight: workingWeight(exIdx),
+      unit: ex.unit,
+      outcome: 'skipped',
+      startedAt: iso(now),
+      completedAt: iso(now),
+      workSeconds: 0,
+      restSeconds: 0,
+    });
   }
 
   function finalizeSession(now: number, status: 'completed' | 'abandoned'): void {
@@ -328,18 +446,19 @@ export const usePlayerStore = defineStore('player', () => {
     if (!s) return;
     s.status = status;
     s.endedAt = iso(now);
-    s.durationSeconds = Math.max(
-      0,
-      Math.round((now - new Date(s.startedAt).getTime()) / 1000),
-    );
+    s.durationSeconds = Math.max(0, Math.round((now - new Date(s.startedAt).getTime()) / 1000));
+    recomputeOutcomes();
+  }
+
+  function recomputeOutcomes(): void {
+    const s = session.value;
+    if (!s) return;
     s.totalRestSeconds = s.exercises.reduce(
       (sum, ex) => sum + ex.sets.reduce((a, b) => a + b.restSeconds, 0),
       0,
     );
     for (const exLog of s.exercises) {
-      if (exLog.sets.length === 0) {
-        exLog.outcome = 'skipped';
-      } else if (exLog.sets.every((x) => x.outcome === 'skipped')) {
+      if (exLog.sets.length === 0 || exLog.sets.every((x) => x.outcome === 'skipped')) {
         exLog.outcome = 'skipped';
       } else if (
         exLog.sets.length === exLog.targetSets &&
@@ -361,18 +480,27 @@ export const usePlayerStore = defineStore('player', () => {
     persistNow();
   }
 
-  /** Rewinds discard the logs of every step at or after `pos`. */
-  function discardFrom(exIdx: number, setIdx: number): void {
-    const s = session.value;
-    if (!s) return;
-    s.exercises.forEach((exLog, i) => {
-      if (i < exIdx) return;
-      exLog.sets = i === exIdx ? exLog.sets.filter((x) => x.setIndex < setIdx) : [];
-    });
+  function moveCursor(pos: Position): void {
+    exerciseIndex.value = pos.exerciseIndex;
+    setIndex.value = pos.setIndex;
   }
 
   function resumeIfPaused(now: number): void {
     if (phase.value === 'paused') resume(now);
+  }
+
+  /** Commits any pending set, then lands on `pos` ready to start. */
+  function goReady(pos: Position | null, now: number): void {
+    if (pending.value) commitPending(now);
+    if (!pos) {
+      goComplete(now);
+      return;
+    }
+    const changedExercise = pos.exerciseIndex !== exerciseIndex.value;
+    moveCursor(pos);
+    enterReady();
+    if (changedExercise) emit('new_exercise');
+    persistNow();
   }
 
   /* ------------------------------ actions ---------------------------- */
@@ -401,27 +529,31 @@ export const usePlayerStore = defineStore('player', () => {
     setIndex.value = 0;
     pending.value = null;
     pendingReps.value = 0;
+    pendingWeight.value = 0;
+    pendingRir.value = null;
+    weightOverrides.value = w.exercises.map(() => null);
     pausedFrom.value = null;
     storageError.value = null;
     nowMs.value = now;
-    // First set starts immediately on Start workout (the tap is the start signal).
+    // The Start workout tap is the start signal for set 1.
     enterSetActive(now);
     persistNow();
     return true;
   }
 
-  /**
-   * User stops the post-rest alarm; the next set's work timer starts here.
-   */
-  function startNextSet(now = Date.now()): void {
+  /** Starts the work timer for the cursor set (stops the alarm). */
+  function startSet(now = Date.now()): void {
     resumeIfPaused(now);
-    if (phase.value !== 'awaiting_set' && phase.value !== 'exercise_intro') return;
+    if (!WAITING_PHASES.includes(phase.value)) return;
     nowMs.value = now;
-    enterSetActive(now, false); // user gesture stops the alarm; no extra go blip
+    enterSetActive(now, false); // the tap itself is the signal
     persistNow();
   }
 
-  /** Primary action in set_active: the set is done; rest starts immediately. */
+  /** Kept for older callers: the alarm button starts the set. */
+  const startNextSet = startSet;
+
+  /** The set is done: rest starts immediately with the logger open. */
   function completeSet(now = Date.now()): void {
     resumeIfPaused(now);
     if (phase.value !== 'set_active') return;
@@ -429,25 +561,85 @@ export const usePlayerStore = defineStore('player', () => {
     if (!ex) return;
     nowMs.value = now;
     const startedAtMs = timer.value.startedAt ?? now;
+    const here: Position = { exerciseIndex: exerciseIndex.value, setIndex: setIndex.value };
+    const previous = logFor(here.exerciseIndex, here.setIndex);
     pending.value = {
-      exerciseIndex: exerciseIndex.value,
-      setIndex: setIndex.value,
+      exerciseIndex: here.exerciseIndex,
+      setIndex: here.setIndex,
       targetReps: ex.targetReps,
-      weight: ex.weight,
+      weight: workingWeight(here.exerciseIndex),
       unit: ex.unit,
       startedAt: iso(startedAtMs),
       completedAt: iso(now),
       workSeconds: Math.max(0, Math.round((now - startedAtMs) / 1000)),
       skipped: false,
     };
-    pendingReps.value = ex.targetReps;
-    advanceAfterSet(now);
+    // Redoing a logged set starts from what was logged before.
+    pendingReps.value = previous && previous.outcome === 'completed' ? previous.actualReps : ex.targetReps;
+    pendingWeight.value = workingWeight(here.exerciseIndex);
+    pendingRir.value = null;
+
+    const next = nextOpenAfter(here);
+    if (!next) {
+      commitPending(now);
+      goComplete(now);
+      return;
+    }
+    const sameExercise = next.exerciseIndex === here.exerciseIndex;
+    const restSeconds = sameExercise ? ex.restBetweenSets : ex.restAfterExercise;
+    moveCursor(next);
+    if (restSeconds > 0) {
+      phase.value = sameExercise ? 'rest_set' : 'rest_exercise';
+      restStartedAt.value = now;
+      startCountdown(now, restSeconds * 1000);
+    } else {
+      commitPending(now);
+      enterAwaitingSet(now);
+      if (!sameExercise) emit('new_exercise');
+    }
+    persistNow();
   }
 
-  /** Rep stepper value for the set awaiting commit. */
+  /** Rep count for the set being logged during rest. */
   function setReps(reps: number): void {
     pendingReps.value = Math.min(999, Math.max(0, Math.round(reps)));
     persistNow(); // a refresh mid-rest must not lose the adjusted count
+  }
+
+  /** Weight used for the set being logged; later sets of that exercise default to it. */
+  function setPendingWeight(weight: number): void {
+    const w = Math.min(9999, Math.max(0, Math.round(weight * 100) / 100));
+    pendingWeight.value = w;
+    const p = pending.value;
+    if (p) setWorkingWeight(p.exerciseIndex, w);
+    persistNow();
+  }
+
+  /** Reps in reserve for the set being logged (null clears it). */
+  function setPendingRir(rir: number | null): void {
+    pendingRir.value = rir === null ? null : Math.min(10, Math.max(0, Math.round(rir)));
+    persistNow();
+  }
+
+  /** Changes the weight used for the rest of this exercise in this session. */
+  function setWorkingWeight(exIdx: number, weight: number): void {
+    const list = [...weightOverrides.value];
+    while (list.length <= exIdx) list.push(null);
+    list[exIdx] = Math.max(0, weight);
+    weightOverrides.value = list;
+    persistNow();
+  }
+
+  /** Ends rest early and starts the next set's work timer right away. */
+  function endRest(now = Date.now()): void {
+    resumeIfPaused(now);
+    if (!REST_PHASES.includes(phase.value)) return;
+    nowMs.value = now;
+    const newExercise = phase.value === 'rest_exercise';
+    commitPending(now);
+    enterSetActive(now, false);
+    if (newExercise) emit('new_exercise');
+    persistNow();
   }
 
   /** +30 s / −15 s on the current rest countdown only. */
@@ -458,6 +650,7 @@ export const usePlayerStore = defineStore('player', () => {
     nowMs.value = now;
     t.endsAt += deltaSeconds * 1000;
     t.duration = Math.max(1, (t.duration ?? 0) + deltaSeconds * 1000);
+    lastCueSecond = null;
     if (t.endsAt <= now) {
       t.endsAt = now;
       tick(now);
@@ -492,161 +685,104 @@ export const usePlayerStore = defineStore('player', () => {
     }
     phase.value = pausedFrom.value;
     pausedFrom.value = null;
+    lastCueSecond = null;
     persistNow();
   }
 
-  /** Tap the timer: pause while running, restart while paused. */
+  /** Tap on the timer: pause or resume a running timer, or start a waiting set. */
   function toggleTimer(now = Date.now()): void {
     if (phase.value === 'paused') {
       resume(now);
-      return;
-    }
-    if (phase.value === 'set_active' || REST_PHASES.includes(phase.value)) {
+    } else if (TIMED_PHASES.includes(phase.value)) {
       pause(now);
+    } else if (WAITING_PHASES.includes(phase.value)) {
+      startSet(now);
     }
-  }
-
-  function writeSkippedSet(exIdx: number, setIdx: number, now: number): void {
-    const s = session.value;
-    const ex = workout.value?.exercises[exIdx];
-    const exLog = s?.exercises[exIdx];
-    if (!s || !ex || !exLog) return;
-    exLog.sets = exLog.sets
-      .filter((x) => x.setIndex !== setIdx)
-      .concat([
-        {
-          setIndex: setIdx,
-          targetReps: ex.targetReps,
-          actualReps: 0,
-          weight: ex.weight,
-          unit: ex.unit,
-          outcome: 'skipped',
-          startedAt: iso(now),
-          completedAt: iso(now),
-          workSeconds: 0,
-          restSeconds: 0,
-        },
-      ])
-      .sort((a, b) => a.setIndex - b.setIndex);
   }
 
   /**
-   * After a skip: never rest, never alarm — land on the next set paused
-   * at 0:00 (or complete). User taps the timer to start.
-   */
-  function advanceAfterSkip(now: number): void {
-    const w = workout.value;
-    const ex = currentExercise.value;
-    if (!w || !ex) return;
-    restStartedAt.value = null;
-    pending.value = null;
-
-    if (setIndex.value < ex.sets - 1) {
-      setIndex.value += 1;
-      enterSetReady(now);
-      persistNow();
-      return;
-    }
-    if (exerciseIndex.value < w.exercises.length - 1) {
-      exerciseIndex.value += 1;
-      setIndex.value = 0;
-      enterSetReady(now);
-      emit('new_exercise');
-      persistNow();
-      return;
-    }
-    goComplete(now);
-  }
-
-  /**
-   * ▶ Skip the current set (or the set you're about to do during rest/alarm).
-   * Never enters rest and never rings the alarm. Lands paused at 0:00.
+   * Skips the cursor set (the one on screen). Never rests, never alarms:
+   * lands on the next open set, ready to start.
    */
   function skipSet(now = Date.now()): void {
     resumeIfPaused(now);
-    if (!isRunning.value || phase.value === 'idle') return;
-    const ex = currentExercise.value;
-    if (!ex) return;
+    if (!isRunning.value || !currentExercise.value) return;
     nowMs.value = now;
-    // Finish logging the set we just left, if rest had started.
     if (pending.value) commitPending(now);
-    writeSkippedSet(exerciseIndex.value, setIndex.value, now);
-    advanceAfterSkip(now);
+    const here: Position = { exerciseIndex: exerciseIndex.value, setIndex: setIndex.value };
+    if (!logFor(here.exerciseIndex, here.setIndex)) {
+      writeSkippedSet(here.exerciseIndex, here.setIndex, now);
+    }
+    goReady(nextOpenAfter(here), now);
+  }
+
+  /** Skips every unlogged set of the cursor exercise and moves on. */
+  function skipExercise(now = Date.now()): void {
+    resumeIfPaused(now);
+    const ex = currentExercise.value;
+    if (!isRunning.value || !ex) return;
+    nowMs.value = now;
+    if (pending.value) commitPending(now);
+    const e = exerciseIndex.value;
+    for (let s = 0; s < ex.sets; s++) {
+      if (!logFor(e, s)) writeSkippedSet(e, s, now);
+    }
+    goReady(nextOpenAfter({ exerciseIndex: e, setIndex: ex.sets - 1 }), now);
+  }
+
+  /** Moves the cursor to any set. Nothing is deleted. */
+  function jumpTo(target: Position, now = Date.now()): void {
+    resumeIfPaused(now);
+    if (!isRunning.value) return;
+    const ex = exerciseAt(target.exerciseIndex);
+    if (!ex || target.setIndex < 0 || target.setIndex >= ex.sets) return;
+    const same =
+      target.exerciseIndex === exerciseIndex.value && target.setIndex === setIndex.value;
+    if (same && (phase.value === 'set_active' || WAITING_PHASES.includes(phase.value))) return;
+    nowMs.value = now;
+    goReady(target, now);
   }
 
   /**
-   * ⏭ Skip the rest of this exercise. Lands on the next exercise's first
-   * set paused at 0:00 — no rest, no alarm.
+   * Goes back one set: during rest that is the set just finished (to redo
+   * it), otherwise the set before the cursor. Nothing is deleted.
    */
-  function skipExercise(now = Date.now()): void {
+  function goBack(now = Date.now()): void {
     resumeIfPaused(now);
-    if (!isRunning.value || phase.value === 'idle') return;
-    const w = workout.value;
-    const ex = currentExercise.value;
-    if (!w || !ex) return;
+    if (!canGoBack.value) return;
     nowMs.value = now;
-    if (pending.value) commitPending(now);
-    for (let i = setIndex.value; i < ex.sets; i++) {
-      writeSkippedSet(exerciseIndex.value, i, now);
-    }
-    restStartedAt.value = null;
-    pending.value = null;
-    if (exerciseIndex.value >= w.exercises.length - 1) {
-      goComplete(now);
+    const p = pending.value;
+    if (p) {
+      goReady({ exerciseIndex: p.exerciseIndex, setIndex: p.setIndex }, now);
       return;
     }
-    exerciseIndex.value += 1;
-    setIndex.value = 0;
-    enterSetReady(now);
-    emit('new_exercise');
-    persistNow();
+    const all = allPositions();
+    const idx = orderOf({ exerciseIndex: exerciseIndex.value, setIndex: setIndex.value });
+    goReady(all[idx - 1] ?? null, now);
   }
 
-  /** ◀ Re-enter the previous set; its log is discarded for re-recording. */
-  function previousSet(now = Date.now()): void {
-    resumeIfPaused(now);
-    if (!canPreviousSet.value) return;
-    const w = workout.value;
-    if (!w) return;
-    nowMs.value = now;
-    let targetEx: number;
-    let targetSet: number;
-    if (pending.value) {
-      // Resting: the previous set is the one awaiting commit.
-      targetEx = pending.value.exerciseIndex;
-      targetSet = pending.value.setIndex;
-      pending.value = null;
-      restStartedAt.value = null;
-    } else if (setIndex.value > 0) {
-      targetEx = exerciseIndex.value;
-      targetSet = setIndex.value - 1;
-    } else {
-      targetEx = exerciseIndex.value - 1;
-      targetSet = (w.exercises[targetEx]?.sets ?? 1) - 1;
+  /** Corrects a set that is already logged (summary screen or plan). */
+  function editLoggedSet(
+    exIdx: number,
+    setIdx: number,
+    patch: { actualReps?: number; weight?: number; rir?: number | null },
+  ): void {
+    const log = logFor(exIdx, setIdx);
+    if (!log) return;
+    if (patch.actualReps !== undefined) {
+      log.actualReps = Math.min(999, Math.max(0, Math.round(patch.actualReps)));
+      log.outcome = log.actualReps > 0 ? 'completed' : 'skipped';
     }
-    discardFrom(targetEx, targetSet);
-    exerciseIndex.value = targetEx;
-    setIndex.value = targetSet;
-    enterSetActive(now, false);
+    if (patch.weight !== undefined) log.weight = Math.max(0, patch.weight);
+    if (patch.rir !== undefined) {
+      if (patch.rir === null) delete log.rir;
+      else log.rir = Math.min(10, Math.max(0, Math.round(patch.rir)));
+    }
+    recomputeOutcomes();
     persistNow();
   }
 
-  /** ⏮ Jump to set 0 of the previous exercise, discarding re-entered logs. */
-  function previousExercise(now = Date.now()): void {
-    resumeIfPaused(now);
-    if (!canPreviousExercise.value) return;
-    nowMs.value = now;
-    pending.value = null;
-    restStartedAt.value = null;
-    const targetEx = exerciseIndex.value - 1;
-    discardFrom(targetEx, 0);
-    exerciseIndex.value = targetEx;
-    setIndex.value = 0;
-    enterAwaitingSet(now, false);
-    persistNow();
-  }
-
-  /** Stop → abandoned. Completed sets (including a pending one) are saved. */
+  /** End early → abandoned. Logged sets (including a pending one) are saved. */
   async function abandon(now = Date.now()): Promise<void> {
     if (!isRunning.value || !session.value) return;
     nowMs.value = now;
@@ -658,22 +794,6 @@ export const usePlayerStore = defineStore('player', () => {
     const sessions = useSessionsStore();
     await sessions.add(JSON.parse(JSON.stringify(session.value)) as Session);
     await clearPlayerState().catch(() => undefined);
-  }
-
-  /** Adjust the final set's reps from the completion summary. */
-  function adjustLastSetReps(reps: number): void {
-    const s = session.value;
-    if (phase.value !== 'complete' || !s) return;
-    for (let i = s.exercises.length - 1; i >= 0; i--) {
-      const sets = s.exercises[i]!.sets;
-      if (sets.length > 0) {
-        const last = sets[sets.length - 1]!;
-        last.actualReps = Math.min(999, Math.max(0, Math.round(reps)));
-        last.outcome = last.actualReps > 0 ? 'completed' : 'skipped';
-        finalizeSession(new Date(s.endedAt ?? s.startedAt).getTime(), 'completed');
-        return;
-      }
-    }
   }
 
   /** Save & finish from the complete screen. The caller resets after navigating. */
@@ -693,49 +813,45 @@ export const usePlayerStore = defineStore('player', () => {
     setIndex.value = 0;
     pending.value = null;
     pendingReps.value = 0;
+    pendingWeight.value = 0;
+    pendingRir.value = null;
+    weightOverrides.value = [];
     restStartedAt.value = null;
     timer.value = emptyTimer();
     lastCueSecond = null;
   }
 
+  function setCountdownBeeps(beeps: number[]): void {
+    countdownBeepsAt.value = beeps.filter((b) => Number.isFinite(b) && b > 0);
+  }
+
   /* ------------------------------- tick ------------------------------ */
 
   /**
-   * Advances the machine to `now`. Fires every expired boundary in order,
-   * anchoring each successor at the boundary time — a tab backgrounded
-   * across several transitions lands exactly where it should.
+   * Advances the machine to `now`. A rest that expired while the page was
+   * in the background lands on the alarm, anchored at the moment rest ended.
+   * Events here drive vibration; sound is scheduled separately.
    */
   function tick(now = Date.now()): void {
     nowMs.value = now;
-    if (!isRunning.value || phase.value === 'paused' || phase.value === 'idle') return;
+    if (!isRunning.value || phase.value === 'paused') return;
 
-    let guard = 0;
-    while (
-      timer.value.kind === 'countdown' &&
-      timer.value.endsAt !== null &&
-      now >= timer.value.endsAt &&
-      guard++ < 10_000
+    const t = timer.value;
+    if (
+      REST_PHASES.includes(phase.value) &&
+      t.kind === 'countdown' &&
+      t.endsAt !== null &&
+      now >= t.endsAt
     ) {
-      const boundary = timer.value.endsAt;
-      // Rest hitting 0 always alarms — that is the signal to get up.
-      if (phase.value === 'rest_set') {
-        commitPending(boundary);
-        enterAwaitingSet(boundary, true);
-        persistNow();
-      } else if (phase.value === 'rest_exercise') {
-        commitPending(boundary);
-        enterAwaitingSet(boundary, true);
-        emit('new_exercise');
-        persistNow();
-      } else if (phase.value === 'exercise_intro') {
-        enterAwaitingSet(boundary, true);
-        persistNow();
-      } else {
-        break;
-      }
+      const boundary = t.endsAt;
+      const newExercise = phase.value === 'rest_exercise';
+      commitPending(boundary);
+      enterAwaitingSet(boundary, true);
+      if (newExercise) emit('new_exercise');
+      persistNow();
     }
 
-    // Rest ticks at 3, 2, 1 — then alarm takes over at 0.
+    // Countdown ticks before rest ends.
     if (
       timer.value.kind === 'countdown' &&
       timer.value.endsAt !== null &&
@@ -744,11 +860,11 @@ export const usePlayerStore = defineStore('player', () => {
       const secondsLeft = Math.ceil((timer.value.endsAt - now) / 1000);
       if (secondsLeft !== lastCueSecond) {
         lastCueSecond = secondsLeft;
-        if (secondsLeft > 0 && REST_TICKS_AT.includes(secondsLeft)) emit('beep');
+        if (secondsLeft > 0 && countdownBeepsAt.value.includes(secondsLeft)) emit('beep');
       }
     }
 
-    // Alarm at 0: keep firing until the user stops it (Start next set).
+    // Alarm repeats until the user starts the set.
     if (phase.value === 'awaiting_set' && timer.value.startedAt !== null) {
       const pulse = Math.floor((now - timer.value.startedAt) / ALARM_INTERVAL_MS);
       if (pulse > lastAlarmPulse) {
@@ -766,22 +882,36 @@ export const usePlayerStore = defineStore('player', () => {
   function hydrate(state: PersistedPlayerState, now = Date.now()): void {
     workout.value = state.workout;
     session.value = state.session;
-    // Map legacy auto-intro onto the wait-for-user phase.
     phase.value = state.phase === 'exercise_intro' ? 'awaiting_set' : state.phase;
-    pausedFrom.value =
-      state.pausedFrom === 'exercise_intro' ? 'awaiting_set' : state.pausedFrom;
+    pausedFrom.value = state.pausedFrom === 'exercise_intro' ? 'awaiting_set' : state.pausedFrom;
     exerciseIndex.value = state.exerciseIndex;
     setIndex.value = state.setIndex;
     pending.value = state.pending;
     pendingReps.value = state.pendingReps;
+    pendingWeight.value = state.pendingWeight ?? state.pending?.weight ?? 0;
+    pendingRir.value = state.pendingRir ?? null;
+    weightOverrides.value =
+      state.weightOverrides ?? (state.workout?.exercises ?? []).map(() => null);
     restStartedAt.value = state.restStartedAt;
     timer.value = state.timer;
     nowMs.value = now;
     lastCueSecond = null;
     lastAlarmPulse = -1;
-    if (phase.value === 'awaiting_set' && timer.value.kind !== 'elapsed') {
-      startElapsed(now);
+
+    // Older versions paused at 0:00 after a skip; that is the ready state now.
+    if (
+      phase.value === 'paused' &&
+      pausedFrom.value === 'set_active' &&
+      (timer.value.pausedElapsed ?? 0) === 0
+    ) {
+      enterReady();
     }
+    // Pausing during an alarm or ready is no longer possible.
+    if (phase.value === 'paused' && pausedFrom.value && WAITING_PHASES.includes(pausedFrom.value)) {
+      phase.value = pausedFrom.value;
+      pausedFrom.value = null;
+    }
+    if (phase.value === 'awaiting_set' && timer.value.kind !== 'elapsed') startElapsed(now);
     if (phase.value !== 'paused') tick(now);
   }
 
@@ -795,12 +925,17 @@ export const usePlayerStore = defineStore('player', () => {
     setIndex,
     pending,
     pendingReps,
+    pendingWeight,
+    pendingRir,
+    weightOverrides,
     restStartedAt,
     timer,
     nowMs,
     storageError,
+    countdownBeepsAt,
     // getters
     currentExercise,
+    currentWeight,
     totalExercises,
     totalSets,
     loggedSets,
@@ -810,26 +945,39 @@ export const usePlayerStore = defineStore('player', () => {
     elapsedMs,
     countdownFraction,
     overallFraction,
+    overallSetNumber,
     effectivePhase,
-    canPreviousSet,
-    canPreviousExercise,
+    upNext,
+    restBeforeUpNext,
+    plan,
+    currentSetPreviousLog,
+    canGoBack,
+    // helpers
+    workingWeight,
+    logFor,
     // actions
     start,
+    startSet,
     startNextSet,
     completeSet,
     setReps,
+    setPendingWeight,
+    setPendingRir,
+    setWorkingWeight,
+    endRest,
     adjustRest,
     pause,
     resume,
     toggleTimer,
     skipSet,
     skipExercise,
-    previousSet,
-    previousExercise,
+    jumpTo,
+    goBack,
+    editLoggedSet,
     abandon,
-    adjustLastSetReps,
     saveAndFinish,
     reset,
+    setCountdownBeeps,
     tick,
     hydrate,
     onEvent,

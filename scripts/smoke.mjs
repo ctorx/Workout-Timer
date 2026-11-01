@@ -59,38 +59,44 @@ await check('Seed workout visible', await visible(page.getByText('Full body (sam
 await page.getByText('Full body (sample)').first().click();
 await page.getByRole('button', { name: 'Start workout' }).click();
 await page.waitForURL('**/play/**');
-await check('Work state', await visible(page.getByText('Work', { exact: true })));
-await check('Set complete button', await visible(page.getByRole('button', { name: 'Set complete' })));
+await check('Work state', await visible(page.getByText('Working', { exact: true })));
+await check('Finish set button', await visible(page.getByRole('button', { name: 'Finish set' })));
+await check('Up next shown', await visible(page.getByText('Set 2 of 3').first()));
 
-await page.getByRole('button', { name: 'Set complete' }).click();
-await check('Rest state', await visible(page.getByText('Rest', { exact: true })));
-await check('Rep stepper shown', await visible(page.getByLabel('Edit rep count')));
-await check('No Done button', !(await page.getByRole('button', { name: 'Done', exact: true }).count()));
+await page.getByRole('button', { name: 'Finish set' }).click();
+await check('Rest state', await visible(page.getByText('Resting', { exact: true })));
+await check('Set logger shown', await visible(page.getByText('Log set 1')));
+await check('Skip names the upcoming set', await visible(page.getByRole('button', { name: /Skip set 2/ })));
 
-await page.getByRole('button', { name: /Fewer reps/ }).click();
-await check(
-  'Stepper decremented to 9',
-  (await page.getByLabel('Edit rep count').textContent())?.trim() === '9',
-);
+await page.getByRole('button', { name: 'Decrease Reps' }).click();
+const repsValue = async () =>
+  ((await page.getByRole('button', { name: /^Reps: / }).getAttribute('aria-label')) ?? '');
+await check('Reps decremented to 9', (await repsValue()).startsWith('Reps: 9'));
+await page.getByRole('radio', { name: /^2 reps left/ }).click();
 
 await page.waitForTimeout(500);
 await page.reload({ waitUntil: 'networkidle' });
-await check('Rest restored after reload', await visible(page.getByText('Rest', { exact: true })));
-await check(
-  'Stepper value survives reload',
-  ((await page.getByLabel('Edit rep count').textContent()) ?? '').trim() === '9',
-);
+await check('Rest restored after reload', await visible(page.getByText('Resting', { exact: true })));
+await check('Reps survive reload', (await repsValue()).startsWith('Reps: 9'));
 
-// Expire rest → alarm until Stop alarm
-for (let i = 0; i < 12; i++) {
-  await page.getByRole('button', { name: '−15s' }).click();
+// Expire rest → alarm until the user starts the set
+const shorten = page.getByRole('button', { name: 'Shorten rest by 15 seconds' });
+for (let i = 0; i < 12 && (await shorten.count()) > 0; i++) {
+  await shorten.click();
 }
-await check('Alarm after rest', await visible(page.getByRole('button', { name: 'Stop alarm' })));
-await page.getByRole('button', { name: 'Stop alarm' }).click();
+await check('Alarm after rest', await visible(page.getByText('Rest is over', { exact: true })));
+await page.getByRole('button', { name: 'Start set 2', exact: true }).click();
 await check(
   'Back to work (set 2)',
   ((await page.getByRole('status').textContent()) ?? '').includes('set 2 of 3'),
 );
+
+// Plan sheet: jump to the last exercise, then back
+await page.getByRole('button', { name: 'Show workout plan' }).click();
+await check('Plan lists every exercise', await visible(page.getByRole('dialog').getByText('One-arm row')));
+await page.getByRole('dialog').getByRole('button', { name: /One-arm row, set 1/ }).click();
+await check('Jumped to One-arm row', await visible(page.getByRole('heading', { name: 'One-arm row' })));
+await check('Ready after jump', await visible(page.getByRole('button', { name: 'Start set 1', exact: true })));
 
 await page.getByRole('button', { name: 'End workout' }).first().click();
 await page.getByRole('dialog').getByRole('button', { name: 'End workout' }).click();

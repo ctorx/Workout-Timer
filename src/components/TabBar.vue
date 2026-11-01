@@ -13,7 +13,7 @@ const tabs = [
   {
     to: '/history',
     label: 'History',
-    match: (name: unknown) => name === 'history' || name === 'session-detail',
+    match: (name: unknown) => name === 'history' || name === 'session-detail' || name === 'exercise-detail',
     icon: 'M12 8v4l3 2M21 12a9 9 0 1 1-9-9 9 9 0 0 1 9 9Z',
   },
   {
@@ -27,16 +27,16 @@ const tabs = [
 
 <template>
   <nav
-    class="safe-bottom sticky bottom-0 z-20 border-t border-border bg-surface-1"
+    class="safe-bottom sticky bottom-0 z-20 border-t border-border bg-surface-1/95 backdrop-blur md:fixed md:inset-y-0 md:left-0 md:w-24 md:border-r md:border-t-0"
     aria-label="Main"
   >
-    <div class="mx-auto flex max-w-xl">
+    <div class="mx-auto flex max-w-xl md:mt-6 md:flex-col md:gap-2 md:px-2">
       <router-link
         v-for="tab in tabs"
         :key="tab.to"
         :to="tab.to"
-        class="flex min-h-[56px] flex-1 flex-col items-center justify-center gap-0.5 text-[11px] font-medium"
-        :class="tab.match(route.name) ? 'text-accent' : 'text-muted'"
+        class="flex min-h-[56px] flex-1 flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition md:min-h-[68px] md:flex-none md:rounded-2xl md:text-xs"
+        :class="tab.match(route.name) ? 'text-accent md:bg-accent/10' : 'text-muted hover:text-text md:hover:bg-surface-2'"
         :aria-current="tab.match(route.name) ? 'page' : undefined"
       >
         <svg

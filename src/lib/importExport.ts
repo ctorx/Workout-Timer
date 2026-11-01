@@ -119,6 +119,10 @@ function validateExercise(v: unknown, path: string, p: P): void {
   if (v.notes !== undefined && typeof v.notes !== 'string') {
     p.push(`${path}.notes: expected a string when present`);
   }
+  // Progression fields, added later and optional.
+  if (v.repsMax !== undefined) expectNumber(v.repsMax, `${path}.repsMax`, p, 1);
+  if (v.weightStep !== undefined) expectNumber(v.weightStep, `${path}.weightStep`, p, 0);
+  if (v.pairedDumbbells !== undefined) expectBoolean(v.pairedDumbbells, `${path}.pairedDumbbells`, p);
 }
 
 function validateWorkout(v: unknown, path: string, p: P): void {
@@ -166,6 +170,7 @@ function validateSetLog(v: unknown, path: string, p: P): void {
   expectString(v.completedAt, `${path}.completedAt`, p);
   expectNumber(v.workSeconds, `${path}.workSeconds`, p, 0);
   expectNumber(v.restSeconds, `${path}.restSeconds`, p, 0);
+  if (v.rir !== undefined) expectNumber(v.rir, `${path}.rir`, p, 0);
 }
 
 function validateSession(v: unknown, path: string, p: P): void {
@@ -228,6 +233,10 @@ function validateSettings(v: unknown, path: string, p: P): void {
   if (v.theme !== 'dark' && v.theme !== 'light' && v.theme !== 'system') {
     p.push(`${path}.theme: expected "dark", "light" or "system"`);
   }
+  // Added after the first release, so older backups may omit them.
+  if (v.backgroundAudio !== undefined) expectBoolean(v.backgroundAudio, `${path}.backgroundAudio`, p);
+  if (v.weightStepLb !== undefined) expectNumber(v.weightStepLb, `${path}.weightStepLb`, p, 0);
+  if (v.weightStepKg !== undefined) expectNumber(v.weightStepKg, `${path}.weightStepKg`, p, 0);
 }
 
 /**

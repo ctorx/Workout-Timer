@@ -29,6 +29,12 @@ const router = createRouter({
       meta: { tab: true, title: 'History' },
     },
     {
+      path: '/history/exercise/:name',
+      name: 'exercise-detail',
+      component: () => import('@/views/ExerciseDetailView.vue'),
+      meta: { tab: true, title: 'Exercise' },
+    },
+    {
       path: '/history/:id',
       name: 'session-detail',
       component: () => import('@/views/SessionDetailView.vue'),
