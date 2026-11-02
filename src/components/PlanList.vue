@@ -68,7 +68,7 @@ function doneCount(ex: PlanExercise): number {
         </p>
         <p class="tnum shrink-0 text-xs text-faint">
           {{ ex.exercise.sets }}×{{ formatRepTarget(ex.exercise) }}
-          <template v-if="ex.workingWeight > 0">· {{ formatLoad(ex.workingWeight, ex.exercise) }}</template>
+          <template v-if="ex.workingWeight !== 0 || ex.exercise.bodyweightShare">· {{ formatLoad(ex.workingWeight, ex.exercise) }}</template>
           · {{ doneCount(ex) }}/{{ ex.exercise.sets }}
         </p>
       </div>

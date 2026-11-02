@@ -37,7 +37,9 @@ async function clearHistory(): Promise<void> {
 }
 
 const finished = computed(() =>
-  sessions.ordered.filter((s) => s.status !== 'in_progress'),
+  [...sessions.forStats]
+    .filter((s) => s.status !== 'in_progress')
+    .sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime()),
 );
 
 const filtered = computed(() =>

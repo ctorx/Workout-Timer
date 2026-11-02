@@ -3,6 +3,7 @@ import type { Exercise, Workout } from '@/types';
 export interface ExerciseErrors {
   name?: string;
   weight?: string;
+  bodyweightShare?: string;
   sets?: string;
   targetReps?: string;
   restBetweenSets?: string;
@@ -21,8 +22,20 @@ function isCount(n: unknown): n is number {
 export function validateExercise(ex: Exercise): ExerciseErrors {
   const errors: ExerciseErrors = {};
   if (!ex.name.trim()) errors.name = 'Give this exercise a name.';
-  if (typeof ex.weight !== 'number' || !Number.isFinite(ex.weight) || ex.weight < 0) {
+  const bodyweight = ex.bodyweightShare !== undefined;
+  if (typeof ex.weight !== 'number' || !Number.isFinite(ex.weight)) {
+    errors.weight = 'Enter a weight.';
+  } else if (!bodyweight && ex.weight < 0) {
     errors.weight = 'Weight must be 0 or more (0 = bodyweight).';
+  }
+  if (
+    bodyweight &&
+    (typeof ex.bodyweightShare !== 'number' ||
+      !Number.isFinite(ex.bodyweightShare) ||
+      ex.bodyweightShare < 0.05 ||
+      ex.bodyweightShare > 1)
+  ) {
+    errors.bodyweightShare = 'Share of bodyweight must be from 5 to 100%.';
   }
   if (!isCount(ex.sets) || ex.sets < 1) errors.sets = 'At least 1 set.';
   if (!isCount(ex.targetReps) || ex.targetReps < 1) errors.targetReps = 'At least 1 rep.';

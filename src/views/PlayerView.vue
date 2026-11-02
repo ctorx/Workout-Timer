@@ -11,14 +11,15 @@ import { loadPlayerState, LS_KEYS, readLocal, writeLocal } from '@/lib/persisten
 import { audioIsReady, unlockAudio } from '@/lib/audio';
 import { formatMmSs, formatDuration } from '@/lib/time';
 import {
+  bodyLoadFor,
   exerciseBests,
   formatPerformance,
   formatVolume,
-  formatWeight,
   isPersonalRecord,
   lastPerformance,
   exerciseHistory,
   formatLoad,
+  formatSetWeight,
   formatRepTarget,
   isPlateau,
   progressionAdvice,
@@ -171,7 +172,7 @@ const segments = computed(() =>
 const lastTime = computed(() => {
   const e = ex.value;
   if (!e) return null;
-  return lastPerformance(sessions.sessions, e.id, e.name, player.session?.id);
+  return lastPerformance(sessions.forStats, e.id, e.name, player.session?.id);
 });
 
 const lastTimeText = computed(() => (lastTime.value ? formatPerformance(lastTime.value.sets) : ''));
@@ -207,7 +208,7 @@ const advice = computed(() => {
 const plateau = computed(() => {
   const e = ex.value;
   if (!e) return false;
-  return isPlateau(exerciseHistory(sessions.sessions, e.name));
+  return isPlateau(exerciseHistory(sessions.forStats, e.name));
 });
 
 const bestsCache = new Map<string, Bests>();
@@ -215,7 +216,7 @@ function bestsFor(exerciseId: string, name: string): Bests {
   const key = `${exerciseId}|${name}|${sessions.sessions.length}`;
   let b = bestsCache.get(key);
   if (!b) {
-    b = exerciseBests(sessions.sessions, exerciseId, name, player.session?.id);
+    b = exerciseBests(sessions.forStats, exerciseId, name, player.session?.id);
     bestsCache.set(key, b);
   }
   return b;
@@ -231,6 +232,7 @@ const pendingIsRecord = computed(() => {
   if (!p || !e) return false;
   const probe = {
     weight: player.pendingWeight,
+    bodyLoad: bodyLoadFor(e.bodyweightShare, e.unit, settingsStore.settings),
     actualReps: player.pendingReps,
     outcome: 'completed',
   } as SetLog;
@@ -261,7 +263,7 @@ const upNext = computed(() => {
   const rest = player.restBeforeUpNext;
   const restText = rest > 0 ? `Rest ${formatDuration(rest)}, then ` : '';
   const weight = player.workingWeight(next.exerciseIndex);
-  const load = weight > 0 ? ` @ ${formatWeight(weight)} ${nextEx.unit}` : '';
+  const load = weight !== 0 ? ` @ ${formatLoad(weight, nextEx)}` : '';
   if (next.exerciseIndex === player.exerciseIndex) {
     return {
       title: `Set ${next.setIndex + 1} of ${nextEx.sets}`,
@@ -512,7 +514,7 @@ async function savePlanWeight(exIdx: number, weight: number): Promise<void> {
               <span class="text-text">{{ e.name }}</span>
               <span class="tnum">
                 {{ e.sets }}×{{ formatRepTarget(e) }}
-                <template v-if="e.weight > 0">· {{ formatLoad(e.weight, e) }}</template>
+                <template v-if="e.weight !== 0 || e.bodyweightShare">· {{ formatLoad(e.weight, e) }}</template>
               </span>
             </li>
           </ol>
@@ -596,7 +598,7 @@ async function savePlanWeight(exIdx: number, weight: number): Promise<void> {
                 <span v-else class="flex-1">
                   <span class="font-semibold" :class="set.actualReps >= set.targetReps ? 'text-text' : 'text-warn'">{{ set.actualReps }}</span>
                   <span class="text-faint"> reps</span>
-                  <template v-if="set.weight > 0"> · {{ formatWeight(set.weight) }} {{ set.unit }}</template>
+                  <template v-if="set.weight !== 0"> · {{ formatSetWeight(set) }}</template>
                   <template v-if="set.rir !== undefined"> · <span class="text-muted">{{ set.rir }} left</span></template>
                 </span>
                 <span
@@ -617,6 +619,7 @@ async function savePlanWeight(exIdx: number, weight: number): Promise<void> {
                   :reps-max="row.planned?.repsMax"
                   :weight-step="row.suggestion?.step ?? (row.planned ? weightStepFor(row.planned, settingsStore.settings) : undefined)"
                   :paired="row.planned?.pairedDumbbells"
+                  :bodyweight="!!row.planned?.bodyweightShare"
                   @update:reps="player.editLoggedSet(row.index, set.setIndex, { actualReps: $event })"
                   @update:weight="player.editLoggedSet(row.index, set.setIndex, { weight: $event })"
                   @update:rir="player.editLoggedSet(row.index, set.setIndex, { rir: $event })"
@@ -637,7 +640,9 @@ async function savePlanWeight(exIdx: number, weight: number): Promise<void> {
                   :model-value="suggestionValue(row.index, row.suggestion.weight)"
                   label="Next time"
                   :step="row.suggestion.step"
+                  :min="row.planned.bodyweightShare ? -999 : 0"
                   :max="9999"
+                  :zero-text="row.planned.bodyweightShare ? 'BW' : ''"
                   :suffix="row.planned.unit"
                   @update:model-value="suggestedWeights = { ...suggestedWeights, [row.index]: $event }"
                 />
@@ -770,8 +775,9 @@ async function savePlanWeight(exIdx: number, weight: number): Promise<void> {
             <div v-if="weightEditorOpen && ex" class="mt-3 flex items-center justify-between gap-3 rounded-2xl bg-surface-1 p-3">
               <NumberStepper
                 :model-value="player.currentWeight"
-                label="Weight this session"
+                :label="ex.bodyweightShare ? 'Added weight this session' : 'Weight this session'"
                 :step="weightStep"
+                :min="ex.bodyweightShare ? -999 : 0"
                 :max="9999"
                 :suffix="ex.unit"
                 zero-text="BW"
@@ -874,6 +880,7 @@ async function savePlanWeight(exIdx: number, weight: number): Promise<void> {
               :reps-max="pendingExercise.repsMax"
               :weight-step="weightStepFor(pendingExercise, settingsStore.settings)"
               :paired="pendingExercise.pairedDumbbells"
+              :bodyweight="!!pendingExercise.bodyweightShare"
               @update:reps="player.setReps($event)"
               @update:weight="player.setPendingWeight($event)"
               @update:rir="player.setPendingRir($event)"

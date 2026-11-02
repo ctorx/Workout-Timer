@@ -109,6 +109,16 @@ so the default step doubles). When every set reaches the top of the range,
 the app suggests one step up and the goal returns to the bottom. A set
 logged with 0 reps left in the tank delays that by one session.
 
+Bodyweight exercises (pull-ups, push-ups, dips) set `bodyweightShare`, the
+share of bodyweight the movement moves (pull-up 1, push-up 0.65). On these
+exercises `weight` is added weight, and a negative weight is band or machine
+assistance. With a bodyweight set in Settings, each logged set stores its
+bodyweight part as `bodyLoad`, and the total load (`bodyLoad + weight`)
+drives the estimated one-rep max, records, volume and charts. So assisted,
+bodyweight-only and weighted sessions sit on one trend line. Sets logged
+before that get their bodyweight part from the current bodyweight at read
+time (`sessions.forStats`). Stored history is never rewritten.
+
 The player shows last time's numbers, the current goal, and a plateau
 notice. The summary flags records, lets you correct any set, and offers to
 update the plan's weight. History links each exercise to a trend page

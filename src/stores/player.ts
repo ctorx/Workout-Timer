@@ -31,12 +31,15 @@ import type {
   Session,
   SetLog,
   TimerSnapshot,
+  Unit,
   Workout,
 } from '@/types';
 import { SCHEMA_VERSION } from '@/types';
 import { uuid } from '@/lib/id';
 import { clearPlayerState, savePlayerState, StorageWriteError } from '@/lib/persistence';
+import { bodyLoadFor, isBodyweightExercise } from '@/lib/stats';
 import { useSessionsStore } from '@/stores/sessions';
+import { useSettingsStore } from '@/stores/settings';
 
 /** How often the post-rest alarm repeats until the user starts the set. */
 export const ALARM_INTERVAL_MS = 1000;
@@ -129,6 +132,17 @@ export const usePlayerStore = defineStore('player', () => {
 
   function exerciseAt(i: number): Exercise | null {
     return workout.value?.exercises[i] ?? null;
+  }
+
+  /** Bodyweight exercises allow negative weight (assistance); others start at 0. */
+  function minWeight(i: number): number {
+    const ex = exerciseAt(i);
+    return ex && isBodyweightExercise(ex) ? -999 : 0;
+  }
+
+  /** The bodyweight part of a set's load, captured when the set is logged. */
+  function bodyLoadAt(i: number, unit: Unit): number | undefined {
+    return bodyLoadFor(exerciseAt(i)?.bodyweightShare, unit, useSettingsStore().settings);
   }
 
   function workingWeight(i: number): number {
@@ -397,7 +411,7 @@ export const usePlayerStore = defineStore('player', () => {
       setIndex: p.setIndex,
       targetReps: p.targetReps,
       actualReps: reps,
-      weight: Math.max(0, pendingWeight.value),
+      weight: Math.max(minWeight(p.exerciseIndex), pendingWeight.value),
       unit: p.unit,
       outcome: reps > 0 ? 'completed' : 'skipped',
       startedAt: p.startedAt,
@@ -409,6 +423,8 @@ export const usePlayerStore = defineStore('player', () => {
           : 0,
     };
     if (pendingRir.value !== null) log.rir = pendingRir.value;
+    const bodyLoad = bodyLoadAt(p.exerciseIndex, p.unit);
+    if (bodyLoad !== undefined) log.bodyLoad = bodyLoad;
     writeLog(p.exerciseIndex, log);
     pending.value = null;
     pendingRir.value = null;
@@ -519,8 +535,9 @@ export const usePlayerStore = defineStore('player', () => {
         exerciseId: ex.id,
         name: ex.name,
         targetSets: ex.sets,
+        ...(ex.bodyweightShare ? { bodyweightShare: ex.bodyweightShare } : {}),
         sets: [],
-        outcome: 'skipped',
+        outcome: 'skipped' as const,
       })),
       durationSeconds: 0,
       totalRestSeconds: 0,
@@ -608,9 +625,10 @@ export const usePlayerStore = defineStore('player', () => {
 
   /** Weight used for the set being logged; later sets of that exercise default to it. */
   function setPendingWeight(weight: number): void {
-    const w = Math.min(9999, Math.max(0, Math.round(weight * 100) / 100));
-    pendingWeight.value = w;
     const p = pending.value;
+    const floor = p ? minWeight(p.exerciseIndex) : 0;
+    const w = Math.min(9999, Math.max(floor, Math.round(weight * 100) / 100));
+    pendingWeight.value = w;
     if (p) setWorkingWeight(p.exerciseIndex, w);
     persistNow();
   }
@@ -625,7 +643,7 @@ export const usePlayerStore = defineStore('player', () => {
   function setWorkingWeight(exIdx: number, weight: number): void {
     const list = [...weightOverrides.value];
     while (list.length <= exIdx) list.push(null);
-    list[exIdx] = Math.max(0, weight);
+    list[exIdx] = Math.max(minWeight(exIdx), weight);
     weightOverrides.value = list;
     persistNow();
   }
@@ -773,7 +791,7 @@ export const usePlayerStore = defineStore('player', () => {
       log.actualReps = Math.min(999, Math.max(0, Math.round(patch.actualReps)));
       log.outcome = log.actualReps > 0 ? 'completed' : 'skipped';
     }
-    if (patch.weight !== undefined) log.weight = Math.max(0, patch.weight);
+    if (patch.weight !== undefined) log.weight = Math.max(minWeight(exIdx), patch.weight);
     if (patch.rir !== undefined) {
       if (patch.rir === null) delete log.rir;
       else log.rir = Math.min(10, Math.max(0, Math.round(patch.rir)));

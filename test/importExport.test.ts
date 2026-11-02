@@ -43,6 +43,8 @@ const settings: Settings = {
   backgroundAudio: true,
   weightStepLb: 5,
   weightStepKg: 2.5,
+  bodyweight: 0,
+  bodyweightUnit: 'lb',
 };
 
 const session: Session = {

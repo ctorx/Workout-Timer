@@ -87,6 +87,29 @@ up. Section references are to the build prompt (`plan.md`).
   estimated one-rep max (or most reps for bodyweight), and needs at least
   four sessions of history. The app only points it out. It never changes
   the plan.
+- **Bodyweight counts as load on bodyweight exercises.** An exercise marked
+  as bodyweight stores `bodyweightShare` (5% to 100%, a starting guess from
+  the name: push-ups 65%, rows 60%, squats and lunges 70%, else 100%). Its
+  `weight` means added weight, and a negative weight means assistance. Total
+  load is bodyweight × share plus weight. Before this, adding a vest switched
+  the trend chart to estimated one-rep max and every earlier bodyweight
+  session dropped to 0.
+- **Each set captures the bodyweight part when it is logged** (`bodyLoad`), so
+  later bodyweight changes do not rewrite history. Sets logged before an
+  exercise was marked, or before a bodyweight was set, borrow the current
+  bodyweight when charts and records are computed. Those stored sessions are
+  not changed, so unmarking an exercise returns them to reps-only tracking.
+  Sets logged while the exercise was marked keep their bodyweight part.
+- **No automatic migration of exercises with weight 0.** The app cannot tell
+  a push-up (65%) from a plank or a stretch, so marking an exercise as
+  bodyweight is the user's choice in the editor.
+- **Bodyweight is converted to the exercise's unit.** This is the one place
+  the app converts between lb and kg, because a bodyweight in lb must count
+  toward a kg exercise. Exercise weights themselves are never converted.
+- **Assisted sets progress toward no assistance.** When every set reaches
+  the top of the range, the advice cuts the assistance by one weight step,
+  and never past zero. Plain bodyweight with nothing added still suggests
+  raising the rep range or adding weight.
 - **Advice is a suggestion.** Nothing changes the plan without a tap on
   "Update plan". Advice that has already been applied (the plan weight is
   already at the suggested weight) turns into "New weight today".

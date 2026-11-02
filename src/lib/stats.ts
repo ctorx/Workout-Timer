@@ -1,6 +1,82 @@
-import type { Exercise, ExerciseLog, Session, SetLog, Unit } from '@/types';
+import type { Exercise, ExerciseLog, Session, SetLog, Settings, Unit } from '@/types';
 
-/** Σ weight × actualReps per unit; mixed units are reported side by side. */
+/* ----------------------------- bodyweight ---------------------------- */
+
+const LB_PER_KG = 2.20462;
+
+export function convertWeight(w: number, from: Unit, to: Unit): number {
+  if (from === to) return w;
+  return from === 'kg' ? w * LB_PER_KG : w / LB_PER_KG;
+}
+
+export function isBodyweightExercise(ex: Pick<Exercise, 'bodyweightShare'>): boolean {
+  return (ex.bodyweightShare ?? 0) > 0;
+}
+
+/**
+ * The bodyweight part of a set's load, in the exercise's unit: bodyweight ×
+ * share, rounded to 0.1. Undefined when the exercise is not a bodyweight
+ * exercise or no bodyweight is set.
+ */
+export function bodyLoadFor(
+  share: number | undefined,
+  unit: Unit,
+  settings: Pick<Settings, 'bodyweight' | 'bodyweightUnit'>,
+): number | undefined {
+  if (!share || share <= 0 || !(settings.bodyweight > 0)) return undefined;
+  const bw = convertWeight(settings.bodyweight, settings.bodyweightUnit, unit);
+  return Math.round(bw * share * 10) / 10;
+}
+
+/** Total load of a set: the bodyweight part (if any) plus the weight. */
+export function setLoad(set: Pick<SetLog, 'weight' | 'bodyLoad'>): number {
+  return set.weight + (set.bodyLoad ?? 0);
+}
+
+/**
+ * A starting share of bodyweight for common movements, used when an
+ * exercise is first marked as bodyweight. The user can change it.
+ */
+export function guessBodyweightShare(name: string): number {
+  const n = name.toLowerCase();
+  if (/push.?up|press.?up/.test(n)) return 0.65;
+  if (/row/.test(n)) return 0.6;
+  if (/squat|lunge|step.?up|split/.test(n)) return 0.7;
+  return 1;
+}
+
+/**
+ * Fills in `bodyLoad` for bodyweight sets that were logged without one
+ * (before the exercise was marked as bodyweight, or before a bodyweight was
+ * set), using the current bodyweight. Returns copies; stored sessions are
+ * never changed. `shareFor` gives the current share for an exercise log
+ * when the log has no snapshot of its own.
+ */
+export function resolveBodyLoads(
+  sessions: Session[],
+  shareFor: (exLog: ExerciseLog) => number | undefined,
+  settings: Pick<Settings, 'bodyweight' | 'bodyweightUnit'>,
+): Session[] {
+  if (!(settings.bodyweight > 0)) return sessions;
+  return sessions.map((session) => {
+    let changed = false;
+    const exercises = session.exercises.map((exLog) => {
+      if (!exLog.sets.some((set) => set.bodyLoad === undefined)) return exLog;
+      const share = exLog.bodyweightShare ?? shareFor(exLog);
+      if (!share || share <= 0) return exLog;
+      changed = true;
+      return {
+        ...exLog,
+        sets: exLog.sets.map((set) =>
+          set.bodyLoad !== undefined ? set : { ...set, bodyLoad: bodyLoadFor(share, set.unit, settings) },
+        ),
+      };
+    });
+    return changed ? { ...session, exercises } : session;
+  });
+}
+
+/** Σ load × actualReps per unit; mixed units are reported side by side. */
 export interface Volume {
   lb: number;
   kg: number;
@@ -10,7 +86,7 @@ export function sessionVolume(session: Session): Volume {
   const v: Volume = { lb: 0, kg: 0 };
   for (const ex of session.exercises) {
     for (const s of ex.sets) {
-      v[s.unit] += s.weight * s.actualReps;
+      v[s.unit] += Math.max(0, setLoad(s)) * s.actualReps;
     }
   }
   return v;
@@ -144,8 +220,9 @@ export function computeProgressions(sessions: Session[]): ExerciseProgression[] 
       let sessionVol = 0;
       for (const s of completedSets) {
         entry.unit = s.unit; // most recent wins
-        if (s.weight > entry.heaviest) entry.heaviest = s.weight;
-        const setVol = s.weight * s.actualReps;
+        const load = Math.max(0, setLoad(s));
+        if (load > entry.heaviest) entry.heaviest = load;
+        const setVol = load * s.actualReps;
         if (setVol > entry.bestSet) entry.bestSet = setVol;
         sessionVol += setVol;
       }
@@ -176,7 +253,7 @@ export function computeProgressions(sessions: Session[]): ExerciseProgression[] 
 /**
  * Estimated one-rep max (Epley). Combines weight and reps into one number,
  * so "more reps at the same weight" and "more weight" both show as progress.
- * Returns 0 for bodyweight or empty sets.
+ * Pass the total load (see `setLoad`). Returns 0 for no load or empty sets.
  */
 export function e1rm(weight: number, reps: number): number {
   if (weight <= 0 || reps <= 0) return 0;
@@ -224,13 +301,22 @@ export function lastPerformance(
   return null;
 }
 
-/** "60 × 6 · 6 · 6 · 5" (weights shown only when they change). */
+/**
+ * "60 × 6 · 6 · 6 · 5" (weights shown only when they change). Bodyweight
+ * sets with added weight or assistance read "BW+25 × 8" or "BW−40 × 8".
+ */
 export function formatPerformance(sets: SetLog[]): string {
   const parts: string[] = [];
   let lastWeight: number | null = null;
   for (const s of sets) {
     if (s.weight !== lastWeight) {
-      parts.push(s.weight > 0 ? `${formatWeight(s.weight)} × ${s.actualReps}` : `${s.actualReps}`);
+      const bodyweight = s.bodyLoad !== undefined || s.weight < 0;
+      if (bodyweight && s.weight !== 0) {
+        const sign = s.weight > 0 ? '+' : '−';
+        parts.push(`BW${sign}${formatWeight(Math.abs(s.weight))} × ${s.actualReps}`);
+      } else {
+        parts.push(s.weight > 0 ? `${formatWeight(s.weight)} × ${s.actualReps}` : `${s.actualReps}`);
+      }
       lastWeight = s.weight;
     } else {
       parts.push(`${s.actualReps}`);
@@ -241,6 +327,15 @@ export function formatPerformance(sets: SetLog[]): string {
 
 export function formatWeight(w: number): string {
   return Number.isInteger(w) ? String(w) : w.toFixed(1).replace(/\.0$/, '');
+}
+
+/** One set's weight: "135 lb", "BW", "BW+25 lb" or "BW−40 lb" (assisted). */
+export function formatSetWeight(set: Pick<SetLog, 'weight' | 'unit' | 'bodyLoad'>): string {
+  const bodyweight = set.bodyLoad !== undefined || set.weight < 0;
+  if (set.weight === 0) return 'BW';
+  if (!bodyweight) return `${formatWeight(set.weight)} ${set.unit}`;
+  const sign = set.weight > 0 ? '+' : '−';
+  return `BW${sign}${formatWeight(Math.abs(set.weight))} ${set.unit}`;
 }
 
 export interface Bests {
@@ -266,8 +361,9 @@ export function exerciseBests(
     if (done.length === 0) continue;
     b.sessions += 1;
     for (const set of done) {
-      b.bestE1rm = Math.max(b.bestE1rm, e1rm(set.weight, set.actualReps));
-      b.heaviest = Math.max(b.heaviest, set.weight);
+      const load = setLoad(set);
+      b.bestE1rm = Math.max(b.bestE1rm, e1rm(load, set.actualReps));
+      b.heaviest = Math.max(b.heaviest, load);
       b.mostReps = Math.max(b.mostReps, set.actualReps);
     }
   }
@@ -276,11 +372,13 @@ export function exerciseBests(
 
 /**
  * A set is a personal record when there is earlier history and it beats it:
- * a higher estimated 1RM for weighted sets, more reps for bodyweight sets.
+ * a higher estimated 1RM when there is a load to compare (bodyweight counts
+ * once it is set), more reps otherwise.
  */
 export function isPersonalRecord(set: SetLog, bests: Bests): boolean {
   if (bests.sessions === 0 || set.outcome !== 'completed' || set.actualReps <= 0) return false;
-  if (set.weight > 0) return e1rm(set.weight, set.actualReps) > bests.bestE1rm + 0.01;
+  const load = setLoad(set);
+  if (load > 0) return e1rm(load, set.actualReps) > bests.bestE1rm + 0.01;
   return set.actualReps > bests.mostReps;
 }
 
@@ -323,8 +421,19 @@ export function weightStepFor(
   return ex.pairedDumbbells ? base * 2 : base;
 }
 
-/** "120 lb (2 × 60)" for a pair of dumbbells, "35 lb" otherwise. */
-export function formatLoad(weight: number, ex: Pick<Exercise, 'unit' | 'pairedDumbbells'>): string {
+/**
+ * "120 lb (2 × 60)" for a pair of dumbbells, "35 lb" otherwise. Bodyweight
+ * exercises read "Bodyweight", "Bodyweight + 25 lb" or "40 lb assist".
+ */
+export function formatLoad(
+  weight: number,
+  ex: Pick<Exercise, 'unit' | 'pairedDumbbells' | 'bodyweightShare'>,
+): string {
+  if (isBodyweightExercise(ex)) {
+    if (weight > 0) return `Bodyweight + ${formatWeight(weight)} ${ex.unit}`;
+    if (weight < 0) return `${formatWeight(-weight)} ${ex.unit} assist`;
+    return 'Bodyweight';
+  }
   if (weight <= 0) return 'Bodyweight';
   const base = `${formatWeight(weight)} ${ex.unit}`;
   return ex.pairedDumbbells ? `${base} (2 × ${formatWeight(weight / 2)})` : base;
@@ -352,7 +461,10 @@ export type ProgressionAdvice =
  */
 export function progressionAdvice(
   sets: SetLog[],
-  ex: Pick<Exercise, 'sets' | 'targetReps' | 'repsMax' | 'unit' | 'weightStep' | 'pairedDumbbells'>,
+  ex: Pick<
+    Exercise,
+    'sets' | 'targetReps' | 'repsMax' | 'unit' | 'weightStep' | 'pairedDumbbells' | 'bodyweightShare'
+  >,
   step: number,
 ): ProgressionAdvice | null {
   const done = sets.filter((s) => s.outcome === 'completed' && s.actualReps > 0);
@@ -369,25 +481,30 @@ export function progressionAdvice(
       goal: max,
       lowest,
       message:
-        weight > 0
+        weight !== 0
           ? `Stay at ${formatLoad(weight, ex)}. Goal: ${max} reps on every set (lowest last time: ${lowest}).`
           : `Goal: ${max} reps on every set (lowest last time: ${lowest}).`,
     };
   }
-  if (weight <= 0) {
+  // Plain bodyweight with nothing added has no weight step to suggest.
+  // Assisted sets (negative weight) step toward no assistance instead.
+  const assisted = weight < 0 && isBodyweightExercise(ex);
+  if (weight === 0 || (weight < 0 && !assisted)) {
     return {
       kind: 'raise-reps',
       message: `Every set hit ${max}. Raise the rep range, or add weight.`,
     };
   }
+  const nextMove = assisted ? 'reduce the assistance' : 'add weight';
   if (done.some((s) => s.rir === 0)) {
     return {
       kind: 'repeat',
       weight,
-      message: `Every set hit ${max}, but at least one was to failure. Repeat ${formatLoad(weight, ex)} once more, then add weight.`,
+      message: `Every set hit ${max}, but at least one was to failure. Repeat ${formatLoad(weight, ex)} once more, then ${nextMove}.`,
     };
   }
-  const to = Math.round((weight + step) * 100) / 100;
+  const raw = Math.round((weight + step) * 100) / 100;
+  const to = assisted ? Math.min(0, raw) : raw;
   return {
     kind: 'increase',
     from: weight,
@@ -416,6 +533,7 @@ export interface ExerciseHistoryPoint {
   date: string;
   sets: SetLog[];
   bestE1rm: number;
+  /** Heaviest total load in the session (bodyweight part included). */
   topWeight: number;
   totalReps: number;
   volume: number;
@@ -435,10 +553,10 @@ export function exerciseHistory(sessions: Session[], name: string): ExerciseHist
       sessionId: s.id,
       date: s.startedAt,
       sets: done,
-      bestE1rm: Math.max(...done.map((x) => e1rm(x.weight, x.actualReps))),
-      topWeight: Math.max(...done.map((x) => x.weight)),
+      bestE1rm: Math.max(...done.map((x) => e1rm(setLoad(x), x.actualReps))),
+      topWeight: Math.max(...done.map((x) => setLoad(x))),
       totalReps: done.reduce((a, x) => a + x.actualReps, 0),
-      volume: done.reduce((a, x) => a + x.weight * x.actualReps, 0),
+      volume: done.reduce((a, x) => a + Math.max(0, setLoad(x)) * x.actualReps, 0),
     });
   }
   return out;

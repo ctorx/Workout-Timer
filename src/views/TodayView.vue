@@ -109,14 +109,14 @@ const sheetRows = computed(() => {
   const w = sheetWorkout.value;
   if (!w) return [];
   return w.exercises.map((ex) => {
-    const last = lastPerformance(sessions.sessions, ex.id, ex.name);
+    const last = lastPerformance(sessions.forStats, ex.id, ex.name);
     const advice = last ? progressionAdvice(last.sets, ex, weightStepFor(ex, settingsStore.settings)) : null;
     return {
       ex,
       last: last ? formatPerformance(last.sets) : null,
       // Already raised in the plan? Then the suggestion has been taken.
       progress: advice?.kind === 'increase' && ex.weight < advice.to ? advice.to : null,
-      stalled: isPlateau(exerciseHistory(sessions.sessions, ex.name)),
+      stalled: isPlateau(exerciseHistory(sessions.forStats, ex.name)),
     };
   });
 });
@@ -310,7 +310,7 @@ const reorderMode = ref(false);
                 <span class="font-medium">{{ row.ex.name }}</span>
                 <span class="tnum shrink-0 text-muted">
                   {{ row.ex.sets }}×{{ formatRepTarget(row.ex) }}
-                  <template v-if="row.ex.weight > 0">· {{ formatLoad(row.ex.weight, row.ex) }}</template>
+                  <template v-if="row.ex.weight !== 0 || row.ex.bodyweightShare">· {{ formatLoad(row.ex.weight, row.ex) }}</template>
                 </span>
               </div>
               <p v-if="row.last || row.progress || row.stalled" class="tnum mt-0.5 text-xs text-muted">

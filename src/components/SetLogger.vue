@@ -22,6 +22,8 @@ const props = defineProps<{
   weightStep?: number;
   /** Shows the per-dumbbell weight under the total. */
   paired?: boolean;
+  /** Bodyweight exercise: weight is added load, and negative means assisted. */
+  bodyweight?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -80,14 +82,20 @@ function pickRir(v: number): void {
       </p>
       <NumberStepper
         :model-value="weight"
-        label="Weight"
+        :label="bodyweight ? 'Added weight' : 'Weight'"
         layout="row"
         :step="weightStep"
+        :min="bodyweight ? -999 : 0"
         :max="9999"
         :suffix="unit"
         zero-text="BW"
         @update:model-value="emit('update:weight', $event)"
       />
+      <p v-if="bodyweight" class="tnum -mt-1 text-right text-xs text-faint">
+        <template v-if="weight > 0">Bodyweight + {{ weight }} {{ unit }}</template>
+        <template v-else-if="weight < 0">{{ -weight }} {{ unit }} of assistance</template>
+        <template v-else>Bodyweight only · below 0 = assisted</template>
+      </p>
       <p v-if="paired && weight > 0" class="tnum -mt-1 text-right text-xs text-faint">
         2 × {{ Number.isInteger(weight / 2) ? weight / 2 : (weight / 2).toFixed(1) }} {{ unit }} dumbbells
       </p>

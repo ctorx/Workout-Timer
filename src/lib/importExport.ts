@@ -108,7 +108,12 @@ function validateExercise(v: unknown, path: string, p: P): void {
   if (expectString(v.name, `${path}.name`, p) && v.name.trim() === '') {
     p.push(`${path}.name: must not be empty`);
   }
-  expectNumber(v.weight, `${path}.weight`, p, 0);
+  // A bodyweight exercise may have negative weight (assistance).
+  const bodyweight = v.bodyweightShare !== undefined;
+  if (bodyweight && expectNumber(v.bodyweightShare, `${path}.bodyweightShare`, p, 0.05) && v.bodyweightShare > 1) {
+    p.push(`${path}.bodyweightShare: must be <= 1, got ${v.bodyweightShare}`);
+  }
+  expectNumber(v.weight, `${path}.weight`, p, bodyweight ? undefined : 0);
   expectNumber(v.sets, `${path}.sets`, p, 1);
   expectNumber(v.targetReps, `${path}.targetReps`, p, 1);
   expectNumber(v.restBetweenSets, `${path}.restBetweenSets`, p, 0);
@@ -159,7 +164,9 @@ function validateSetLog(v: unknown, path: string, p: P): void {
   expectNumber(v.setIndex, `${path}.setIndex`, p, 0);
   expectNumber(v.targetReps, `${path}.targetReps`, p, 0);
   expectNumber(v.actualReps, `${path}.actualReps`, p, 0);
-  expectNumber(v.weight, `${path}.weight`, p, 0);
+  // Negative weight is assistance on a bodyweight exercise.
+  expectNumber(v.weight, `${path}.weight`, p);
+  if (v.bodyLoad !== undefined) expectNumber(v.bodyLoad, `${path}.bodyLoad`, p, 0);
   if (v.unit !== 'lb' && v.unit !== 'kg') {
     p.push(`${path}.unit: expected "lb" or "kg"`);
   }
@@ -203,6 +210,9 @@ function validateSession(v: unknown, path: string, p: P): void {
     expectString(exLog.exerciseId, `${exPath}.exerciseId`, p);
     expectString(exLog.name, `${exPath}.name`, p);
     expectNumber(exLog.targetSets, `${exPath}.targetSets`, p, 0);
+    if (exLog.bodyweightShare !== undefined) {
+      expectNumber(exLog.bodyweightShare, `${exPath}.bodyweightShare`, p, 0);
+    }
     if (exLog.outcome !== 'completed' && exLog.outcome !== 'partial' && exLog.outcome !== 'skipped') {
       p.push(`${exPath}.outcome: expected "completed", "partial" or "skipped"`);
     }
@@ -237,6 +247,10 @@ function validateSettings(v: unknown, path: string, p: P): void {
   if (v.backgroundAudio !== undefined) expectBoolean(v.backgroundAudio, `${path}.backgroundAudio`, p);
   if (v.weightStepLb !== undefined) expectNumber(v.weightStepLb, `${path}.weightStepLb`, p, 0);
   if (v.weightStepKg !== undefined) expectNumber(v.weightStepKg, `${path}.weightStepKg`, p, 0);
+  if (v.bodyweight !== undefined) expectNumber(v.bodyweight, `${path}.bodyweight`, p, 0);
+  if (v.bodyweightUnit !== undefined && v.bodyweightUnit !== 'lb' && v.bodyweightUnit !== 'kg') {
+    p.push(`${path}.bodyweightUnit: expected "lb" or "kg"`);
+  }
 }
 
 /**

@@ -408,6 +408,38 @@ async function eraseAll(): Promise<void> {
       />
     </section>
 
+    <!-- Bodyweight -->
+    <section class="mt-4 rounded-2xl border border-border bg-surface-1 p-4">
+      <h2 class="text-xs font-semibold uppercase tracking-widest text-faint">Bodyweight</h2>
+      <p class="mt-1 text-xs text-faint">
+        Counts your bodyweight as load on exercises marked as bodyweight, such as pull-ups and
+        push-ups. Then adding a vest, cutting assistance and adding reps all show up on the same
+        chart. Each new set keeps the bodyweight you had when you logged it. Older sets use your
+        current bodyweight.
+      </p>
+      <div class="mt-3 flex">
+        <input
+          type="number"
+          inputmode="decimal"
+          min="0"
+          step="0.1"
+          aria-label="Bodyweight"
+          placeholder="Not set"
+          class="tnum w-full rounded-l-xl border border-border bg-surface-2 px-3 py-2.5"
+          :value="s.bodyweight > 0 ? s.bodyweight : ''"
+          @change="settingsStore.update({ bodyweight: Math.max(0, Number.parseFloat(($event.target as HTMLInputElement).value) || 0) })"
+        />
+        <button
+          type="button"
+          class="rounded-r-xl border border-l-0 border-border bg-surface-2 px-3 text-sm font-semibold text-accent"
+          :aria-label="`Bodyweight unit: ${s.bodyweightUnit}. Tap to switch`"
+          @click="settingsStore.update({ bodyweightUnit: s.bodyweightUnit === 'lb' ? 'kg' : 'lb' })"
+        >
+          {{ s.bodyweightUnit }}
+        </button>
+      </div>
+    </section>
+
     <!-- Weight steps -->
     <section class="mt-4 rounded-2xl border border-border bg-surface-1 p-4">
       <h2 class="text-xs font-semibold uppercase tracking-widest text-faint">Weight steps</h2>

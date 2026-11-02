@@ -1,6 +1,9 @@
 import { defineStore } from 'pinia';
 import type { Session } from '@/types';
 import { loadSessions, saveSession, deleteSession } from '@/lib/persistence';
+import { exerciseKey, resolveBodyLoads } from '@/lib/stats';
+import { useSettingsStore } from '@/stores/settings';
+import { useWorkoutsStore } from '@/stores/workouts';
 
 export const useSessionsStore = defineStore('sessions', {
   state: (): { sessions: Session[]; loaded: boolean } => ({
@@ -8,6 +11,29 @@ export const useSessionsStore = defineStore('sessions', {
     loaded: false,
   }),
   getters: {
+    /**
+     * Sessions for charts, records and advice. Bodyweight sets logged
+     * without a bodyweight part (older sets, or before a bodyweight was set)
+     * get one from the current bodyweight. Stored sessions are not changed.
+     */
+    forStats(state): Session[] {
+      const settings = useSettingsStore().settings;
+      const workouts = useWorkoutsStore().workouts;
+      const byId = new Map<string, number>();
+      const byName = new Map<string, number>();
+      for (const w of workouts) {
+        for (const ex of w.exercises) {
+          if (!ex.bodyweightShare) continue;
+          byId.set(ex.id, ex.bodyweightShare);
+          byName.set(exerciseKey(ex.name), ex.bodyweightShare);
+        }
+      }
+      return resolveBodyLoads(
+        state.sessions,
+        (exLog) => byId.get(exLog.exerciseId) ?? byName.get(exerciseKey(exLog.name)),
+        settings,
+      );
+    },
     /** Reverse chronological. */
     ordered(state): Session[] {
       return [...state.sessions].sort(

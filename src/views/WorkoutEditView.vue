@@ -6,7 +6,7 @@ import { useWorkoutsStore } from '@/stores/workouts';
 import { validateWorkout, workoutIsValid } from '@/lib/validation';
 import { uuid } from '@/lib/id';
 import { DAY_NAMES_SHORT } from '@/lib/time';
-import { weightStepFor } from '@/lib/stats';
+import { guessBodyweightShare, weightStepFor } from '@/lib/stats';
 import { useSettingsStore } from '@/stores/settings';
 import ConfirmDialog from '@/components/ConfirmDialog.vue';
 
@@ -112,6 +112,14 @@ function defaultStep(ex: Exercise): number {
   return weightStepFor({ unit: ex.unit, pairedDumbbells: ex.pairedDumbbells }, settingsStore.settings);
 }
 
+/** What the app will suggest once every set reaches the top of the range. */
+function nextStepText(ex: Exercise): string {
+  const step = `${ex.weightStep ?? defaultStep(ex)} ${ex.unit}`;
+  if (ex.bodyweightShare && ex.weight === 0) return 'raising the rep range, or adding weight';
+  if (ex.bodyweightShare && ex.weight < 0) return `cutting the assistance by ${step}`;
+  return `adding ${step}`;
+}
+
 /** An empty top-of-range box means a single target. */
 function setRepsMax(ex: Exercise, e: Event): void {
   const raw = (e.target as HTMLInputElement).value.trim();
@@ -136,6 +144,22 @@ function setWeightStep(ex: Exercise, e: Event): void {
 function setPaired(ex: Exercise, e: Event): void {
   if ((e.target as HTMLInputElement).checked) ex.pairedDumbbells = true;
   else delete ex.pairedDumbbells;
+}
+
+/** Turning bodyweight on starts from a typical share for the movement. */
+function setBodyweight(ex: Exercise, e: Event): void {
+  if ((e.target as HTMLInputElement).checked) {
+    ex.bodyweightShare = guessBodyweightShare(ex.name);
+  } else {
+    delete ex.bodyweightShare;
+    // Assistance only makes sense with bodyweight.
+    if (ex.weight < 0) ex.weight = 0;
+  }
+}
+
+function setBodyweightShare(ex: Exercise, e: Event): void {
+  const v = Number.parseFloat((e.target as HTMLInputElement).value);
+  ex.bodyweightShare = Number.isFinite(v) ? Math.round(v) / 100 : Number.NaN;
 }
 
 function fieldInt(e: Event): number {
@@ -287,13 +311,15 @@ function fieldInt(e: Event): number {
 
         <div class="mt-3 grid grid-cols-2 gap-3">
           <div>
-            <label :for="`w-${ex.id}`" class="text-xs text-faint">Weight (0 = bodyweight)</label>
+            <label :for="`w-${ex.id}`" class="text-xs text-faint">
+              {{ ex.bodyweightShare ? 'Added weight (below 0 = assisted)' : 'Weight (0 = bodyweight)' }}
+            </label>
             <div class="mt-1 flex">
               <input
                 :id="`w-${ex.id}`"
                 type="number"
-                inputmode="decimal"
-                min="0"
+                :inputmode="ex.bodyweightShare ? 'text' : 'decimal'"
+                :min="ex.bodyweightShare ? undefined : 0"
                 step="0.5"
                 :value="ex.weight"
                 class="tnum w-full rounded-l-xl border bg-surface-2 px-3 py-2.5"
@@ -420,15 +446,56 @@ function fieldInt(e: Event): number {
               </span>
             </label>
           </div>
+          <div class="mt-3 grid grid-cols-2 gap-3">
+            <label class="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                class="h-5 w-5 shrink-0 accent-[var(--c-accent)]"
+                :checked="!!ex.bodyweightShare"
+                @change="setBodyweight(ex, $event)"
+              />
+              <span>
+                Bodyweight exercise
+                <span class="block text-xs text-faint">Your bodyweight counts as load</span>
+              </span>
+            </label>
+            <div v-if="ex.bodyweightShare">
+              <label :for="`bws-${ex.id}`" class="text-xs text-faint">Share of bodyweight (%)</label>
+              <input
+                :id="`bws-${ex.id}`"
+                type="number"
+                inputmode="numeric"
+                min="5"
+                max="100"
+                :value="Math.round(ex.bodyweightShare * 100)"
+                class="tnum mt-1 w-full rounded-xl border bg-surface-2 px-3 py-2.5"
+                :class="exError(ex, 'bodyweightShare') ? 'border-danger' : 'border-border'"
+                @input="setBodyweightShare(ex, $event)"
+              />
+            </div>
+          </div>
+          <p v-if="exError(ex, 'bodyweightShare')" class="mt-1 text-xs text-danger">
+            {{ exError(ex, 'bodyweightShare') }}
+          </p>
+          <p v-if="ex.bodyweightShare" class="mt-2 text-xs text-faint">
+            Typical shares: pull-up, chin-up and dip 100%, push-up 65%, inverted row 60%. Weight
+            above is added weight, such as a vest or belt. Enter a negative number for band or
+            machine assistance.
+            <template v-if="!(settingsStore.settings.bodyweight > 0)">
+              <router-link :to="{ name: 'settings' }" class="font-medium text-accent underline">
+                Set your bodyweight in Settings
+              </router-link>
+              so it counts toward the load.
+            </template>
+          </p>
           <p class="mt-2 text-xs text-faint">
             <template v-if="ex.repsMax && ex.repsMax > ex.targetReps">
               Work up from {{ ex.targetReps }} to {{ ex.repsMax }} reps. When every set reaches
-              {{ ex.repsMax }}, the app suggests adding {{ ex.weightStep ?? defaultStep(ex) }} {{ ex.unit }}.
+              {{ ex.repsMax }}, the app suggests {{ nextStepText(ex) }}.
             </template>
             <template v-else>
-              When every set reaches {{ ex.targetReps || '–' }} reps, the app suggests adding
-              {{ ex.weightStep ?? defaultStep(ex) }} {{ ex.unit }}. Set a rep range above to work up
-              before adding weight.
+              When every set reaches {{ ex.targetReps || '–' }} reps, the app suggests
+              {{ nextStepText(ex) }}. Set a rep range above to work up before adding weight.
             </template>
           </p>
         </div>

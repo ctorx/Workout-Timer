@@ -4,8 +4,18 @@ export type Unit = 'lb' | 'kg';
 export interface Exercise {
   id: UUID;
   name: string;
-  weight: number; // >= 0; 0 means bodyweight
+  /**
+   * The load in `unit`. For a bodyweight exercise (see `bodyweightShare`)
+   * this is added weight: 0 = bodyweight only, negative = assistance
+   * (band or machine). Otherwise >= 0, and 0 means bodyweight.
+   */
+  weight: number;
   unit: Unit;
+  /**
+   * Marks a bodyweight exercise: the share of bodyweight it moves, from
+   * 0.05 to 1 (pull-up 1, push-up 0.65). Absent = a plain weighted exercise.
+   */
+  bodyweightShare?: number;
   sets: number; // >= 1
   targetReps: number; // >= 1; the bottom of the rep range
   /** Top of the rep range (double progression). Absent = a single target. */
@@ -36,8 +46,15 @@ export interface SetLog {
   setIndex: number; // 0-based within the exercise
   targetReps: number;
   actualReps: number; // 0 when skipped
+  /** Load in `unit`. For a bodyweight exercise: added weight, negative = assisted. */
   weight: number;
   unit: Unit;
+  /**
+   * Bodyweight exercises only: the bodyweight part of the load in `unit`
+   * (bodyweight × share), captured when the set was logged. Total load is
+   * `bodyLoad + weight`. Absent when no bodyweight was set in Settings.
+   */
+  bodyLoad?: number;
   outcome: SetOutcome;
   startedAt: string;
   completedAt: string;
@@ -51,6 +68,8 @@ export interface ExerciseLog {
   exerciseId: UUID;
   name: string; // denormalized snapshot at session time
   targetSets: number;
+  /** Snapshot of the exercise's `bodyweightShare` at session time. */
+  bodyweightShare?: number;
   sets: SetLog[];
   outcome: 'completed' | 'partial' | 'skipped';
 }
@@ -81,6 +100,9 @@ export interface Settings {
   /** Weight stepper increments. */
   weightStepLb: number;
   weightStepKg: number;
+  /** Your bodyweight, used to count it as load on bodyweight exercises. 0 = not set. */
+  bodyweight: number;
+  bodyweightUnit: Unit;
 }
 
 /* ------------------------------------------------------------------ */

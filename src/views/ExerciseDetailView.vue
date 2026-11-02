@@ -10,14 +10,20 @@ const route = useRoute();
 const sessions = useSessionsStore();
 
 const name = computed(() => decodeURIComponent(route.params.name as string));
-const history = computed(() => exerciseHistory(sessions.sessions, name.value));
+const history = computed(() => exerciseHistory(sessions.forStats, name.value));
 const unit = computed(() => {
   const last = history.value[history.value.length - 1];
   return last?.sets[0]?.unit ?? 'lb';
 });
 
-/** Bodyweight exercises track reps; weighted ones track estimated 1RM. */
+/**
+ * Exercises with a load track estimated 1RM; plain bodyweight tracks reps.
+ * A bodyweight exercise has a load once a bodyweight is set in Settings.
+ */
 const weighted = computed(() => history.value.some((h) => h.topWeight > 0));
+const countsBodyweight = computed(() =>
+  history.value.some((h) => h.sets.some((s) => s.bodyLoad !== undefined)),
+);
 
 const points = computed(() =>
   history.value.map((h) => ({
@@ -100,9 +106,11 @@ function avgRir(sets: { rir?: number }[]): string | null {
         </h2>
         <p class="mt-0.5 text-xs text-muted">
           {{
-            weighted
-              ? 'Combines weight and reps, so adding either one shows up as progress.'
-              : 'Bodyweight exercise: progress shows up as more reps.'
+            weighted && countsBodyweight
+              ? 'Counts your bodyweight plus any added weight, minus assistance. More reps, more weight or less help all show up as progress.'
+              : weighted
+                ? 'Combines weight and reps, so adding either one shows up as progress.'
+                : 'Bodyweight exercise: progress shows up as more reps. Set your bodyweight in Settings to track load.'
           }}
         </p>
         <div class="mt-3">

@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useSessionsStore } from '@/stores/sessions';
-import { sessionVolume, formatVolume, sessionCompletionPercent } from '@/lib/stats';
+import { sessionVolume, formatVolume, formatSetWeight, sessionCompletionPercent } from '@/lib/stats';
 import { formatClockTime, formatDuration, formatShortDate, formatWeekday } from '@/lib/time';
 import ConfirmDialog from '@/components/ConfirmDialog.vue';
 
@@ -10,7 +10,8 @@ const route = useRoute();
 const router = useRouter();
 const sessions = useSessionsStore();
 
-const session = computed(() => sessions.byId(route.params.id as string));
+// Bodyweight-aware copy, so volume counts the bodyweight part of each set.
+const session = computed(() => sessions.forStats.find((s) => s.id === route.params.id));
 
 const activeSeconds = computed(() =>
   (session.value?.exercises ?? []).reduce(
@@ -136,7 +137,7 @@ async function deleteSession(): Promise<void> {
                 </template>
               </td>
               <td class="py-1.5">
-                {{ set.weight > 0 ? `${set.weight} ${set.unit}` : 'BW' }}
+                {{ formatSetWeight(set) }}
               </td>
               <td class="py-1.5 text-muted">{{ set.rir ?? '–' }}</td>
               <td class="py-1.5 text-right text-muted">{{ set.workSeconds }}s</td>
